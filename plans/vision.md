@@ -48,7 +48,7 @@ We are a **student-controlled layer above existing school systems**. Institution
 1. **Cold start / state maintenance.** The agent is only as good as its model of the student's state. If the student must manually feed the system, we have *added* cognitive load and they churn in two weeks (the Notion-template death). Every design decision is judged by: *does this reduce what the student must tell the system?*
 2. **The system can't observe most work directly.** Canvas submission status is the one hard signal, and only for submitted work. Progress observation is therefore mostly conversational. The design constraint that follows: **a check-in must cost the student less than the value of the replan it produces** — a one-word text reply, never a form. The agent should synthesize state from whatever the chat gives it and ask only when asking is cheap.
 3. **The replanning moment is the retention event.** Every planner dies at the first broken plan. A student who skipped two days is anxious; a naive replan ("do 6 hours today") or a moralizing one kills trust. A calm triage builds it. **Missing a day should increase trust in the product.**
-4. **Trust doesn't survive a caused missed deadline.** The factual layer can never hallucinate (see §8 — this is the reason the architecture has a deterministic core).
+4. **Trust doesn't survive a caused missed deadline.** The factual layer can never hallucinate (see §10 — this is the reason the architecture has a deterministic core).
 5. **Channel risk (accepted).** The daily loop rides on iMessage via unofficial infrastructure (Photon). Apple has killed such products before (Beeper). We take this risk deliberately — iMessage is that much better than SMS on cost, richness, and where students actually live. Mitigation: keep the delivery layer thin so the channel is an adapter, not the architecture; a channel death should be a painful week, not a rewrite.
 6. **Structural churn and seasonal acquisition.** Semesters end, summers are dead, users graduate; peak onboarding motivation is a two-window-a-year event (September/January). We must support **mid-semester onboarding**: assume N topics covered and M assignments done, backfill from what sources give us, and move forward — a degraded-but-real path, not a locked door.
 
@@ -64,9 +64,13 @@ Part of the college experience is messing around and being a non-ideal student. 
 
 Everything else in the product is a view over this state.
 
-- **Course:** grade weights, deadline list, recurring rhythm (lecture/reading/PSet cadence), materials library.
-- **Task:** estimated effort, actual effort history, grade impact, status, due date, type (`do` | `prepared` — typed from day one so new fulfillment types are added as handlers, not restructures).
-- **Student (global):** available time blocks, observed pacing (planning must learn the gap between estimated and actual effort — exact mechanism TBD; this is a realism feature, not a moat), compliance patterns (never works Friday nights → stop scheduling Friday nights).
+Stored as **facts with provenance** (see §9); derived quantities are computed, not stored as truth.
+
+- **Course:** grading scheme as stated (categories, weights, points, drop rules), deadlines, schedule facts as stated (readings/psets per week), materials.
+- **Task:** due date, points/category, status, source + confidence, type (`do` | `prepared` — typed from day one so new fulfillment types are added as handlers, not restructures), effort estimates and actuals as they're learned.
+- **Student (global):** available time blocks, observed pacing (the planner must learn estimated-vs-actual effort — mechanism TBD; a realism feature, not a moat), compliance patterns (never works Friday nights → stop scheduling Friday nights).
+
+Derived on top: importance (simple, not a grade formula), rhythm, hell weeks, structural observations.
 
 **Defensibility lives in the accumulated state model** (switching cost once it knows your semester) **and in earned trust** (a student rescued from two broken weeks doesn't leave) — not in any single learned parameter.
 
@@ -117,9 +121,34 @@ School email is usually institutional Microsoft 365 behind SSO — real integrat
 
 ---
 
-## 8. Architecture: hybrid planner with a precise seam
+## 8. Product surfaces
 
-**Deterministic layer owns facts and invariants:** state model, candidate task list, hard constraints (due dates, available windows, never schedule over classes), grade-impact math, pacing adjustments. Output: a scored, *feasible* option set.
+The daily product is the iMessage thread. The web app is where you **look, read, fix, and create** — visited when needed, and often because the agent sent you there ("your chem review guide is ready → link"). The thread is where the plan gets **negotiated**. Design rule: the web app has no chat box and never asks you to schedule; the thread never makes you scroll a dashboard.
+
+### The thread (iMessage via Photon / Spectrum)
+Morning plan, replans, check-ins, ad-hoc questions ("when's my next chem thing?"), state updates in natural language, attachments as ingestion, links out to the web app. Channel risk accepted per §3.5. Photon is TypeScript-only, webhook-based inbound — one of the reasons the whole stack is TS.
+
+### The web app
+Sidebar: **Dashboard · Semester · Library · Connectors · Settings · — · one entry per course.**
+
+- **Dashboard (home)** — the web mirror of the thread: what's coming, today's plan, recent artifacts worth referring to, quick links. Rule: if the thread wouldn't mention it, the dashboard doesn't lead with it. Prevents widget sprawl.
+- **Semester** — filterable, zoomable timeline (this week / month / semester; filter by course). Workload heat, big-ticket items, structural observations. Calendar-*shaped* but not a scheduler: click into anything to see facts + provenance and **fix** it; never drag-to-plan.
+- **Course pages** — a course-scoped dashboard, not a workspace: what the grade is made of, what's coming, materials the agent has, artifacts for this course. Same components as elsewhere, filtered. Promote to a workspace only if a real need appears.
+- **Library** — Drive-like. Everything the agent prepared and everything the student uploaded, made, or imported. Foldered by course by default, editable, searchable. Where `prepared` fulfillment lands.
+- **Connectors** — Canvas token, iCal, email-in address, later Notion/Docs and more. Set-and-forget with health status. Ingestion as a first-class, student-controlled surface.
+- **Settings** — availability, phone, voice preferences ("fewer check-ins"), account.
+
+---
+
+## 9. Facts vs. inference (state model principle)
+
+The state model stores **what sources say**: points possible, category, due date, "readings for week 3: ch. 5–6", submission status, extracted syllabus text with provenance. Everything derived — importance, rhythm, hell weeks, pacing — is **computed downstream** and recomputable when we change our minds. Do not encode a formula (e.g. grade impact = weight × point share) into the schema: real courses have dropped lowest, quizzes that half-count, curves. Store ingredients; derive a simple *importance* later. The LLM at ingestion **extracts; it does not infer.**
+
+---
+
+## 10. Architecture: hybrid planner with a precise seam
+
+**Deterministic layer owns facts and invariants:** state model, candidate task list, hard constraints (due dates, available windows, never schedule over classes), importance, pacing adjustments. Output: a scored, *feasible* option set.
 
 **LLM layer owns judgment and language:** choosing among feasible options, weighting soft context ("he's stressed about chem"), interpreting messy student replies into state updates ("yeah i didnt do it lol im going out"), and all outbound communication. The LLM freestyles **within** the feasible set; it never generates the set.
 
@@ -127,26 +156,40 @@ School email is usually institutional Microsoft 365 behind SSO — real integrat
 
 Side benefit: "why this?" gets a true, legible answer ("worth 25%, due Thursday, last 2-hour window") instead of a post-hoc rationalization. Cheap to build this way from the start; expensive to retrofit.
 
----
-
-## 9. Interfaces
-
-- **iMessage (via Photon / photon.codes Spectrum)** — the daily loop: morning actions, check-ins, renegotiation, updates, and ad-hoc material ingestion (attachments). Meeting students where they already are is part of the product insight, not plumbing. Nobody opens a planner web app at 11pm; everyone reads texts. (Channel risk accepted and mitigated per §3.5.)
-- **Web app** — onboarding, semester view / workload map, state editing, and the **resource library** where prepared materials accumulate (the legitimate daily web-app use: finding and using resources). UI/UX and scope here still need real definition — tracked as an open question.
+**Stack (decided):** all TypeScript, one monorepo (`packages/core` = state model + ingestion + planner; `apps/web` = Next.js; `apps/agent` = Photon + LLM layer + scheduler). Postgres + Drizzle, zod at every LLM boundary, Anthropic SDK (native PDF for syllabi), Firecrawl for course sites, S3-compatible object storage for files. No agent framework — the deterministic seam *is* the guardrail; plain TS orchestration until flows prove otherwise.
 
 ---
 
-## 10. Explicitly not building now
+## 11. Workstreams, milestones, and how we build
+
+Three workstreams over a shared core, developed **in parallel** — parallelism is a process choice (separate concurrent Fable threads, each delegating to Opus subagents, founder tests), not a reason to over-split the repo.
+
+- **Core** — facts-only state model, ingestion adapters (Canvas, iCal, syllabus, sites), snapshot→diff→events sync, planner (feasible set). Goes first, then keeps growing.
+- **Thread** — Photon, LLM judgment layer, voice guidelines, nightly pass, morning push, replan, check-ins.
+- **Web** — onboarding → Dashboard/Semester/Course → Library/Connectors → artifacts.
+
+Milestones cut across workstreams:
+1. **It talks** — facts ingested from Duke data, onboarding + Dashboard/Semester, first morning text. Demo the product, not a dashboard.
+2. **It holds** — replan on miss, check-ins, mid-semester onboarding, live tokens from friends.
+3. **It prepares** — materials access (§7), Library, `prepared` tasks.
+4. **It learns** — pacing/compliance, more connectors (Notion/Docs), browser extension if warranted.
+
+Each workstream gets its own plan doc in `plans/`.
+
+---
+
+## 12. Explicitly not building now
 
 - Institutional / LMS-side integration of any kind.
 - Real email integration (OAuth/SSO into school Microsoft 365 or Gmail).
-- Browser extension (candidate for a later phase).
+- Browser extension (candidate for a later milestone).
+- Web chat box — one conversational surface (the thread) until data says otherwise.
 - Tutoring / pedagogy / mastery modeling. We prepare and schedule; we don't teach.
 
-## 11. Open questions
+## 13. Open questions
 
 - Materials access end-state: which combination of §7 mechanisms actually feels hands-free in practice?
 - Pacing mechanism: how does the planner learn estimated-vs-actual effort without burdensome self-report?
-- Web app scope and UX: what belongs there beyond onboarding, semester map, and the resource library?
+- Check-in cadence: evening pings vs. ask-only-when-tomorrow-depends-on-it.
 - First-user definition (§2) needs validation against real onboarding.
 - Monetization and the LTV shape (low student willingness-to-pay, ≤4-year lifespan) — unaddressed by design for now; revisit after the loop demonstrably retains.
