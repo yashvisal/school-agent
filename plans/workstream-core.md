@@ -64,7 +64,7 @@ Every fetch is stored as an immutable snapshot. A pure function `diff(prev, next
 
 ### Adapters (each: `fetch → snapshot`, `normalize → tasks/courses`)
 
-1. **Canvas** — REST, per-user token, `Link`-header pagination. Pull: courses, assignments (due, points, group weights), submissions (status/score), and *also files/modules/pages/announcements now* (store raw; used in Phase 3 — costs nothing to capture early). Handle unpublished/concluded courses gracefully (Duke data is ~half unpublished).
+1. **Canvas** — REST, per-user token, `Link`-header pagination. Pull: courses, assignments (due, points, group weights), submissions (status/score), and *also files/modules/pages/announcements now* (store raw; used at Milestone 3 — costs nothing to capture early). Handle unpublished/concluded courses gracefully (Duke data is ~half unpublished).
 2. **iCal** — parse VEVENTs; titles + due dates only. Dedupe against Canvas by title/date fuzzy match; Canvas wins on conflict.
 3. **Syllabus PDF** — Claude native PDF → zod schema: grade weights, exam dates, recurring schedule, policies (late, drops). Every extracted item carries a confidence + source page. Low-confidence items surface for one-tap confirmation in onboarding, not silent insertion.
 4. **Course website** — Firecrawl → markdown → same extraction schema as syllabus.
