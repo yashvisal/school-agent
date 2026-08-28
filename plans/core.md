@@ -24,7 +24,7 @@ The facts-only state model, the pipes that fill it, the diff engine, and a v0 pl
 
 ## Stack
 
-Core lives in `convex/` (vision §10 repo shape): schema, ingestion, diff, planner, changes, signals, hydrate queries, usage, crons. **Convex** (DB, real-time, scheduled functions, file storage), **Clerk** (auth). LLM calls through a provider-agnostic layer (Vercel AI SDK) with zod schemas; models chosen per task, swappable. Firecrawl for course sites and PDF→markdown. Agents run on eve (vision §10); Core has no agent code — it is what agents read and write through Convex functions.
+Core lives in `convex/` (vision §10 repo shape): schema, ingestion, diff, planner, changes, signals, hydrate queries, usage, crons. **Convex** (DB, real-time, scheduled functions, file storage), **Clerk** (auth). LLM calls through a provider-agnostic layer (Vercel AI SDK) with zod schemas; models chosen per task, swappable. **AnyDoc** (Firecrawl's MIT Rust library, Node bindings, no API key) for all uploaded documents → markdown (PDF, Word, PPT, Excel, EPUB…), run locally in a Convex action or sandbox — student documents never leave our infra; scanned/image PDFs fall back to a vision-capable model. Hosted Firecrawl API only for crawling course websites. Agents run on eve (vision §10); Core has no agent code — it is what agents read and write through Convex functions.
 
 ## State model — facts, minimal
 
@@ -72,8 +72,8 @@ The pending queue must never become a chore inbox. Rules:
 
 1. **Canvas** — REST, per-user token, Link-header pagination. Courses, assignments (due, points, group weights), submissions, plus files/modules/pages/announcements (raw). Handle unpublished/concluded courses (Duke data ~half unpublished). Verify rate limits at developerdocs.instructure.com.
 2. **iCal** — VEVENTs → deadlines (title + date only). Canvas iCal feeds encode the assignment ID in the event UID (`event-assignment-<id>`), so dedupe against the Canvas adapter is an **exact join on ID**; fuzzy title/date matching is only the fallback for non-Canvas feeds. Canvas wins on conflict.
-3. **Syllabus PDF** — Firecrawl → markdown → LLM extraction into zod schema: grading scheme, exam dates, dated readings/psets → deadlines. Every item carries confidence + page ref; all of it is `needs_approval` at onboarding (bulk-approve UI).
-4. **Course website** — Firecrawl → markdown → same extraction schema.
+3. **Syllabus PDF** — AnyDoc → markdown → LLM extraction into zod schema: grading scheme, exam dates, dated readings/psets → deadlines. Every item carries confidence + page ref; all of it is `needs_approval` at onboarding (bulk-approve UI).
+4. **Course website** — Firecrawl (hosted crawl) → markdown → same extraction schema.
 5. **Class schedule** — uploaded image/file (or Canvas sections/iCal class events where available) → LLM extraction into weekly hard blocks → `needs_approval` (student verifies the parse in a simple weekly view) → becomes the planner's class boundaries.
 6. **Personal calendar** (Milestone 2) — Google/Apple calendar read access → busy blocks and life events (not deadlines). Trivial OAuth compared to school email; turns availability from a static grid into reality.
 
@@ -121,4 +121,4 @@ Merge precedence: Canvas (status/dates) > syllabus (grading scheme) > iCal > sit
 ## References
 
 - Canvas LMS API — https://developerdocs.instructure.com/
-- Convex — https://convex.dev · Clerk — https://clerk.com · Firecrawl — https://firecrawl.dev
+- Convex — https://convex.dev · Clerk — https://clerk.com · AnyDoc — https://github.com/firecrawl/anydoc (docs→markdown, MIT, keyless) · Firecrawl — https://firecrawl.dev (course-site crawling only)

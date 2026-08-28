@@ -184,7 +184,7 @@ The state model stores **what sources say**: points possible, category, due date
 
 Side benefit: "why this?" gets a true, legible answer ("worth 25%, due Thursday, last 2-hour window") instead of a post-hoc rationalization. Cheap to build this way from the start; expensive to retrofit.
 
-**Stack (decided):** all TypeScript, one repo. **Convex** for database, real-time, scheduled functions, and file storage; **Clerk** for auth. **Model-agnostic LLM layer** via the Vercel AI SDK with zod-validated structured outputs; swap models per task; never depend on provider-specific features (PDFs are parsed to text — Firecrawl — before the model). **Deployed on Vercel** — everything else already is.
+**Stack (decided):** all TypeScript, one repo. **Convex** for database, real-time, scheduled functions, and file storage; **Clerk** for auth. **Model-agnostic LLM layer** via the Vercel AI SDK with zod-validated structured outputs; swap models per task; never depend on provider-specific features (documents are parsed to markdown — AnyDoc, locally — before the model). **Deployed on Vercel** — everything else already is.
 
 ### Agent runtime: eve — and the truth rule
 
@@ -275,4 +275,5 @@ In parallel, and independent of the Face: **Core** starts on day one against the
 - **Vercel pricing** — Sandbox: https://vercel.com/docs/sandbox/pricing · Workflows: https://vercel.com/docs/workflows/pricing · Functions: https://vercel.com/docs/functions/usage-and-pricing · Pro plan: https://vercel.com/docs/plans/pro-plan · Spend Management: https://vercel.com/docs/spend-management
 - **Canvas LMS API** — https://developerdocs.instructure.com/ — REST, per-user tokens, no push (polling); iCal feeds encode assignment IDs in event UIDs.
 - **Convex** — https://convex.dev — DB, real-time, scheduled functions, file storage. **Clerk** — https://clerk.com — auth.
-- **Firecrawl** — https://firecrawl.dev — course websites and PDF → markdown.
+- **AnyDoc** — https://github.com/firecrawl/anydoc — uploaded documents → markdown, MIT, local, no API key. **Firecrawl** — https://firecrawl.dev — course-site crawling only.
+- **Braintrust** (optional, later) — eval/trace SaaS eve can report to; local `eve eval` + Vercel Agent Runs suffice for M1–M2.
