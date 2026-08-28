@@ -34,3 +34,8 @@ pnpm-debug.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# test data (founder Duke snapshots, syllabi) — keep out of git until scrubbed
+/fixtures/
+!/fixtures/.gitkeep
+!.env.example
