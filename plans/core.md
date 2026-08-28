@@ -6,7 +6,7 @@
 
 The facts-only state model, the pipes that fill it, the diff engine, and a v0 planner — so Face can render onboarding / Dashboard / Semester and Voice can send a correct first morning text.
 
-**Exit test:** founder's Duke Canvas data + syllabi + course sites → complete, correct deadlines and grading schemes with provenance; a change feed that correctly reports synthetic changes; a feasible-actions set for "tomorrow" that never violates a hard constraint.
+**Exit test:** sandbox Canvas instance + any real syllabi / course sites → complete, correct deadlines and grading schemes with provenance; a change feed that correctly reports synthetic changes; a feasible-actions set for "tomorrow" that never violates a hard constraint.
 
 ## In scope (Milestone 1)
 
@@ -14,7 +14,7 @@ The facts-only state model, the pipes that fill it, the diff engine, and a v0 pl
 2. Ingestion adapters (five in M1): Canvas (token), iCal, syllabus PDF, course website, class schedule. Personal calendar is M2.
 3. Snapshot → diff → changes, with the two-tier apply/approve rule.
 4. Planner v0: feasible actions for a date under hard constraints; nightly precompute cron that triggers Voice.
-5. Fixtures + tests from the Duke dataset, including synthetic change scenarios and extraction eval fixtures.
+5. Fixtures + tests from the sandbox Canvas instance and real documents, including synthetic change scenarios and extraction eval fixtures.
 
 ## Not in scope here
 
@@ -50,7 +50,7 @@ Not modeled: importance, rhythm, hell weeks. Cheap helpers may compute simple vi
 Every fetch is stored as an immutable snapshot. `diff(prevNormalized, nextNormalized) → changes[]` is a pure function. State updates come *only* from applied changes.
 
 - Canvas has no push; polling is the only option (start 30 min; back off). Diffing is required anyway.
-- **Stale data becomes useful:** hand-mutate or synthesize "next" snapshots from the Duke data to exercise the full pipeline (deadline moved/added/removed, submission landed) without a live semester.
+- **Stale data becomes useful:** mutate the sandbox Canvas course (or hand-edit captured snapshots) to exercise the full pipeline (deadline moved/added/removed, submission landed) without a live semester.
 - Replayable, debuggable, provenance for free.
 
 ### Two-tier apply rule
@@ -70,7 +70,7 @@ The pending queue must never become a chore inbox. Rules:
 
 ### Adapters (each: `fetch → snapshot`, `normalize → courses/deadlines/materials`)
 
-1. **Canvas** — REST, per-user token, Link-header pagination. Courses, assignments (due, points, group weights), submissions, plus files/modules/pages/announcements (raw). Handle unpublished/concluded courses (Duke data ~half unpublished). Verify rate limits at developerdocs.instructure.com.
+1. **Canvas** — REST, per-user token, Link-header pagination. Courses, assignments (due, points, group weights), submissions, plus files/modules/pages/announcements (raw). Handle unpublished/concluded courses. Verify rate limits at developerdocs.instructure.com.
 2. **iCal** — VEVENTs → deadlines (title + date only). Canvas iCal feeds encode the assignment ID in the event UID (`event-assignment-<id>`), so dedupe against the Canvas adapter is an **exact join on ID**; fuzzy title/date matching is only the fallback for non-Canvas feeds. Canvas wins on conflict.
 3. **Syllabus PDF** — AnyDoc → markdown → LLM extraction into zod schema: grading scheme, exam dates, dated readings/psets → deadlines. Every item carries confidence + page ref; all of it is `needs_approval` at onboarding (bulk-approve UI).
 4. **Course website** — Firecrawl (hosted crawl) → markdown → same extraction schema.
@@ -83,7 +83,7 @@ Merge precedence: Canvas (status/dates) > syllabus (grading scheme) > iCal > sit
 
 `feasibleActions(studentId, date) → option[]` — for each open task/deadline within horizon, the windows it could fit given availability, class blocks, and due dates; each option annotated with plain facts (due in N days, points/category, remaining windows before due). No LLM. No importance formula — the annotations *are* what the LLM weighs. Hard guarantee: never proposes a window that overlaps a class or a time after the due date.
 
-**Effort estimates (decided):** v0 uses crude priors by deadline kind (reading 45m, homework 2h, quiz prep 1h, project 4h, exam prep 3h — tune on Duke data) as **low-confidence estimates**, labeled as such in the annotation; `studentSignals` on pacing override them per course when present. Enough to size windows; the agent treats them as hints, not facts.
+**Effort estimates (decided):** v0 uses crude priors by deadline kind (reading 45m, homework 2h, quiz prep 1h, project 4h, exam prep 3h — tune on real syllabi) as **low-confidence estimates**, labeled as such in the annotation; `studentSignals` on pacing override them per course when present. Enough to size windows; the agent treats them as hints, not facts.
 
 **Nightly precompute (Convex cron):** for each active student, compute tomorrow's feasible set, pending-change annotations, and a signals digest, store the snapshot, then trigger the eve Voice run (`POST /eve/v1/session` with an idempotent `operationId`). Convex decides who gets a run; eve decides what to say (voice.md M1 #2).
 
@@ -99,16 +99,17 @@ Merge precedence: Canvas (status/dates) > syllabus (grading scheme) > iCal > sit
 
 ## Test data & limitations
 
-- Founder's Duke token (~half courses published) + course sites/syllabi. Capture snapshots into scrubbed fixtures early so tests don't depend on Duke.
-- Stale: no real-time dynamics; synthetic change fixtures cover it. Live behavior validated once friends' tokens exist.
-- Canvas per-user token is ToS-gray, may break silently → `sources.health` surfaced in Face.
+- **No founder Canvas token** — Duke does not let alumni generate one. Primary dev target is a **Free-for-Teacher Canvas instance** (canvas.instructure.com) the founder controls: 2–3 seeded courses shaped like a real semester, a real access token, and — unlike stale data — *live* changes (move a due date, add an assignment) to exercise poll → diff → changes end to end. Capture snapshots into `fixtures/` (gitignored) so tests run from files.
+- Duke Canvas **iCal feed URL** (no token needed if the founder can still log in) is real data for the iCal adapter. Syllabus / site / schedule adapters need no Canvas at all — they run on whatever documents land in `fixtures/`.
+- Friends' live Canvas tokens arrive at semester start (~Sept 2026): validation on real course structure, not a dependency.
+- Canvas per-user token is ToS-gray on institutional instances and may break silently → `sources.health` surfaced in Face.
 
 ## Definition of done
 
 - [ ] Repo + Convex + Clerk scaffold; Convex codegen types consumed by `app/` and `agent/`.
 - [ ] Snapshot/diff/changes with tests on synthetic fixtures; two-tier rule enforced.
-- [ ] Five adapters (Canvas, iCal, syllabus, site, schedule) normalize Duke data; merge precedence implemented.
-- [ ] **Extraction eval fixtures checked in:** every Duke syllabus, course site, and schedule upload has a hand-verified expected-output fixture; the extraction pipelines run against them in CI. (eve's `defineEval` guards the agents; nothing else guards the Convex-side extraction.)
+- [ ] Five adapters (Canvas, iCal, syllabus, site, schedule) normalize sandbox + real data; merge precedence implemented.
+- [ ] **Extraction eval fixtures checked in:** every real syllabus, course site, and schedule upload has a hand-verified expected-output fixture; the extraction pipelines run against them in CI. (eve's `defineEval` guards the agents; nothing else guards the Convex-side extraction.)
 - [ ] `feasibleActions` with constraint tests; effort priors labeled low-confidence.
 - [ ] Nightly precompute cron stores a snapshot and triggers a Voice run with an idempotent `operationId`.
 - [ ] Mid-semester path works.
