@@ -6,7 +6,7 @@
 
 The facts-only state model, the pipes that fill it, the diff engine, and a v0 planner — so Face can render onboarding / Dashboard / Semester and Voice can send a correct first morning text.
 
-**Exit test:** sandbox Canvas instance + any real syllabi / course sites → complete, correct deadlines and grading schemes with provenance; a change feed that correctly reports synthetic changes; a feasible-actions set for "tomorrow" that never violates a hard constraint.
+**Exit test:** spec-derived Canvas fixtures + any real syllabi / course sites → complete, correct deadlines and grading schemes with provenance; a change feed that correctly reports synthetic changes; a feasible-actions set for "tomorrow" that never violates a hard constraint.
 
 ## In scope (Milestone 1)
 
@@ -14,7 +14,7 @@ The facts-only state model, the pipes that fill it, the diff engine, and a v0 pl
 2. Ingestion adapters (five in M1): Canvas (token), iCal, syllabus PDF, course website, class schedule. Personal calendar is M2.
 3. Snapshot → diff → changes, with the two-tier apply/approve rule.
 4. Planner v0: feasible actions for a date under hard constraints; nightly precompute cron that triggers Voice.
-5. Fixtures + tests from the sandbox Canvas instance and real documents, including synthetic change scenarios and extraction eval fixtures.
+5. Spec-derived Canvas/iCal fixtures + real documents, including synthetic change scenarios and extraction eval fixtures.
 
 ## Not in scope here
 
@@ -50,7 +50,7 @@ Not modeled: importance, rhythm, hell weeks. Cheap helpers may compute simple vi
 Every fetch is stored as an immutable snapshot. `diff(prevNormalized, nextNormalized) → changes[]` is a pure function. State updates come *only* from applied changes.
 
 - Canvas has no push; polling is the only option (start 30 min; back off). Diffing is required anyway.
-- **Stale data becomes useful:** mutate the sandbox Canvas course (or hand-edit captured snapshots) to exercise the full pipeline (deadline moved/added/removed, submission landed) without a live semester.
+- **No live data needed to test it:** mutate spec-derived fixture snapshots to exercise the full pipeline (deadline moved/added/removed, submission landed) without any Canvas access.
 - Replayable, debuggable, provenance for free.
 
 ### Two-tier apply rule
@@ -97,22 +97,27 @@ Merge precedence: Canvas (status/dates) > syllabus (grading scheme) > iCal > sit
 - Agent tools are the *only* write path from eve into Core, and they all emit `changes` (vision §10 truth rule).
 - Mid-semester onboarding: past deadlines default `submitted` if Canvas says so; otherwise one prompt.
 
-## Test data & limitations
+## Test data & limitations — build to spec, validate later
 
-- **No founder Canvas token** — Duke does not let alumni generate one. Primary dev target is a **Free-for-Teacher Canvas instance** (canvas.instructure.com) the founder controls: 2–3 seeded courses shaped like a real semester, a real access token, and — unlike stale data — *live* changes (move a due date, add an assignment) to exercise poll → diff → changes end to end. Capture snapshots into `fixtures/` (gitignored) so tests run from files.
-- Duke Canvas **iCal feed URL** (no token needed if the founder can still log in) is real data for the iCal adapter. Syllabus / site / schedule adapters need no Canvas at all — they run on whatever documents land in `fixtures/`.
-- Friends' live Canvas tokens arrive at semester start (~Sept 2026): validation on real course structure, not a dependency.
+**No live Canvas of any kind until a friend's token arrives (a few days after v1).** Duke no longer issues tokens to alumni, the Free-for-Teacher sandbox is not available, and the founder's Duke iCal feed is too stale to trust. Decision: **build every adapter to the published spec now, validate on a real account later.** Concretely:
+
+- **Canvas fixtures are hand-authored from Instructure's API docs** (developerdocs.instructure.com publishes an example JSON response per endpoint): courses, assignments (incl. assignment groups/weights), submissions, files/modules/pages/announcements, plus `Link`-header pagination samples. Shapes and field names come from the docs, never from memory. Fixtures live in `fixtures/canvas/` and are committed (they contain no real data).
+- **Synthetic change scenarios** are derived from those fixtures (deadline moved / added / removed, submission landed) and drive the diff → changes tests.
+- **iCal fixtures** are hand-authored `.ics` files using Canvas's `event-assignment-<id>` UID convention, so the exact-join dedupe is tested.
+- Syllabus / site / schedule adapters run on whatever real documents the founder supplies; until then, one or two public syllabi from the web.
+- **Deferred to the live-validation pass (first friend's token):** rate limits, real pagination behavior, unpublished/concluded course handling, submission-status edge cases, and the `Link` header in practice. Expect a short fix-up cycle then; design the adapter so the fetch layer is thin and swappable.
 - Canvas per-user token is ToS-gray on institutional instances and may break silently → `sources.health` surfaced in Face.
 
 ## Definition of done
 
 - [ ] Repo + Convex + Clerk scaffold; Convex codegen types consumed by `app/` and `agent/`.
 - [ ] Snapshot/diff/changes with tests on synthetic fixtures; two-tier rule enforced.
-- [ ] Five adapters (Canvas, iCal, syllabus, site, schedule) normalize sandbox + real data; merge precedence implemented.
+- [ ] Five adapters (Canvas, iCal, syllabus, site, schedule) normalize spec fixtures + real documents; merge precedence implemented.
 - [ ] **Extraction eval fixtures checked in:** every real syllabus, course site, and schedule upload has a hand-verified expected-output fixture; the extraction pipelines run against them in CI. (eve's `defineEval` guards the agents; nothing else guards the Convex-side extraction.)
 - [ ] `feasibleActions` with constraint tests; effort priors labeled low-confidence.
 - [ ] Nightly precompute cron stores a snapshot and triggers a Voice run with an idempotent `operationId`.
 - [ ] Mid-semester path works.
+- [ ] **Live-validation checklist written** (what to verify the day a real token arrives) — see Test data.
 
 ## Open questions
 

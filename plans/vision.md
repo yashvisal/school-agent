@@ -122,9 +122,9 @@ Anticipatory content prep requires having the underlying materials. Current thin
 
 *Status: direction, not settled. The bar for any addition here: does it feel hands-free?*
 
-### Development reality (until semester start)
+### Development reality (until a real token arrives)
 
-We have no live student data until the semester begins and friends hand over Canvas tokens. Until then we build and demo against the founder's old Duke account: a personal Canvas token with roughly half the courses still published, plus the associated course websites. This is **stale data** — good for exercising ingestion, parsing, and the semester-picture payoff; useless for testing real-time behavior (new assignments appearing, deadlines moving, submissions landing). Canvas also has no push/WebSocket API, so live updates will be **polling-based** regardless. Plan accordingly: Phase 1 proves ingestion correctness on stale data; real-time dynamics get validated only once live tokens exist. Details in the Phase 1 plan.
+We have **no live Canvas access at all** until a friend at school hands over a token — a few days after v1, at semester start. Duke no longer issues tokens to alumni, the free sandbox instance isn't available, and the founder's old iCal feed is too stale to trust. Decision: **build every adapter to Instructure's published spec (fixtures hand-authored from the docs' example responses), validate against a real account in a short fix-up pass afterwards.** Canvas has no push/WebSocket API, so live sync is polling-based regardless; the snapshot→diff design means the change pipeline is fully testable on fixtures. Details and the live-validation checklist in core.md.
 
 ### Email integration (deferred)
 
