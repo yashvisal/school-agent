@@ -36,10 +36,20 @@ const body = {
   kind: arg("kind", "morning"),
 }
 // `date` is required and must be the STUDENT's local calendar day (the Convex
-// cron computes this per student; here we stand in for it with the demo
-// student's timezone from fixtures/student-demo.json).
-const tz = "America/New_York"
-body.date = arg("date", new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date()))
+// cron computes this per student). The default below uses the DEMO student's
+// timezone (fixtures/student-demo.json), which is only correct for
+// VOICE_DEMO_PHONE — for any other --phone we don't know the timezone, so
+// require an explicit --date instead of guessing.
+let date = arg("date")
+if (!date) {
+  if (args.includes("--phone") && body.phone !== process.env.VOICE_DEMO_PHONE) {
+    console.error("--date YYYY-MM-DD is required with --phone (unknown timezone for that student)")
+    process.exit(1)
+  }
+  const tz = "America/New_York"
+  date = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date())
+}
+body.date = date
 
 const startedAt = Date.now()
 const res = await fetch(url, {

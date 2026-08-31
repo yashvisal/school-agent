@@ -28,9 +28,9 @@ The daily product: the **planning agent**, over Core, in iMessage (Photon / Spec
 
 None trips → eve-Voice is final; `convex/voice/` never exists.
 
-## Spike A — readout (2026-08-30, eve 0.47.3, spectrum-ts 12.8.0)
+## Spike A — readout (2026-08-30 → 08-31, eve 0.47.3, spectrum-ts 12.8.0)
 
-Everything below was verified against the installed packages or Photon's docs on the date above; "unverified" is stated where it applies. Code lives in `agent/voice/`.
+Everything below was verified against the installed packages, Photon's docs, or the live line during the dates above; "unverified" is stated where it applies. Code lives in `agent/voice/`.
 
 ### Two-agent layout (item 6) — decided
 
@@ -119,6 +119,15 @@ Attachments (item 3): outbound text + PDF + PNG delivered to the founder's phone
 
 - **3 (state thinness) — does not trip.** eve persists per session: append-only conversation history, `defineState` slots, channel routing state, sandbox (unused here). On Vercel that is Vercel Workflow; locally `.eve/.workflow-data`. Sessions live 30 days (`limits.sessionTimeoutMs`), then the next message starts fresh (Apple's thread is unbroken; the agent's recalled history resets — survivable because the nightly precompute re-supplies facts). We keep the footprint to history + routing by construction: **no `defineState` slots and no memory provider** (`fileMemory()` would put durable student facts in Blob and break the truth rule). `compaction` and `POST …/session/:id/clear` are the levers to cap it further.
 - **4 (reliability/latency) — the real risk is duplicates, not latency.** Path: Photon → signed POST → Vercel Function → `markRead` gRPC → durable Workflow run → model/tools → gRPC reply; ack is fast (work runs behind `waitUntil`). But eve re-runs an interrupted step ("make non-idempotent side effects idempotent"), and there is no webhook dedupe, so a duplicate *send* is the realistic failure mode. Mitigations: `turnPolicy: "queue"`, Core-side dedupe, idempotent `operationId` on triggers. Cold-start numbers: unverified (not documented). Spectrum exposes no delivery-status webhook — "did the morning push land" is not observable today.
+
+### Operational notes — current spike state (temporary, until a real deploy)
+
+- **The whole loop currently runs on the founder's machine:** `pnpm exec eve build && pnpm exec eve start --port 3002` from `agent/voice`, behind a cloudflared *quick* tunnel. If the box sleeps or either process dies, the line goes silent — that's ops, not code. A quick tunnel's URL changes on every restart, and the Photon webhook is registered against it, so a tunnel restart means **recreating the webhook** (Spectrum REST `POST /projects/{id}/webhooks`), which also **rotates the signing secret** → update `IMESSAGE_WEBHOOK_SECRET` and restart the server. First durable step: a Vercel deploy, which moves the webhook to the stable domain at `/eve/agents/voice/eve/v1/photon` and makes the secret set-once.
+- **The webhook path differs by topology:** `/eve/agents/voice/eve/v1/photon` under `withEve` (Next dev / Vercel), `/eve/v1/photon` under bare `eve start`. Same for `/…/trigger`. The dev scripts take `PHOTON_PATH` / `--path` overrides for this.
+- **Trigger auth is a single shared secret** (`x-voice-trigger-secret`). Acceptable while the route is only reachable through a private tunnel; on a public Vercel deploy, Core should call it with Vercel OIDC (or at minimum keep the secret only in Vercel env and rotate it), and the real `operationId` idempotency store must exist first — the in-memory dedupe is per-process.
+- **The prod-build server and `eve dev` share `.eve/.workflow-data`** — never run both against the same agent dir without clearing it (see the bug note above).
+- **Signing secret hygiene:** the spike's original webhook secret was rotated on 2026-08-31 (it had been echoed into a local log during debugging); secrets live only in `.env.local` / host env, never in committed files.
+- **Model pin:** `agent.ts` pins the Gateway model id by string (`anthropic/claude-sonnet-5`). Changing it is a one-line PR; per-task model split (cheap classifier vs composer) is M1 work.
 
 ## Milestone 1 scope ("it talks")
 

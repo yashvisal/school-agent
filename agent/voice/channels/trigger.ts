@@ -24,7 +24,16 @@ const TriggerBody = z.object({
   // Required, and computed by the caller in the STUDENT's timezone (voice.md
   // M1 #2: Convex decides who gets a run and hands it what's true). Deriving a
   // default here from UTC could plan the wrong calendar day.
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  date: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .refine(
+      (d) => {
+        const t = new Date(`${d}T12:00:00Z`)
+        return !Number.isNaN(t.getTime()) && t.toISOString().slice(0, 10) === d
+      },
+      { message: "Not a real calendar date." },
+    ),
 })
 
 /**
