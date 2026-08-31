@@ -619,10 +619,16 @@ routes above.
 | `internal.voice.recordSignal` | internalMutation | Record a signal. |
 | `internal.voice.logUsage` | internalMutation | Log an LLM call. |
 | `internal.voice.resolveStudent` | internalQuery | Phone/Clerk id → student. |
+| `internal.inbound.record` | internalMutation | Inbound log: dedupe + warmed count. |
+| `internal.inbound.prune` | internalMutation | Inbound-log TTL cleanup (cron). |
 | `internal.planner.compute` | internalQuery | Plan for a date, uncached. |
 | `api.planner.feasibleActions` | query | Same, for Face, behind `requireStudent`. |
 | `internal.signals.record` | internalMutation | Signal write for non-Voice surfaces. |
-| `api.signals.list` | query | Recent signals, for Face. |
+| `api.signals.recent` | query | Recent signals, identity-scoped, for Face. |
+| `api.courses.list` / `api.courses.get` | query | Courses, identity-scoped, for Face. |
+| `api.deadlines.list` | query | Deadlines + `pendingChangeId` annotation, for Face. |
+| `api.tasks.list` | query | Tasks, identity-scoped, for Face. |
+| `api.changes.feed` | query | The change feed, identity-scoped, for Face. |
 | `internal.nightly.tick` | internalAction | Hourly cron entry point. |
 | `internal.nightly.runForStudent` | internalAction | One student, one day. |
 | `internal.nightly.runNow` | internalAction | Manual trigger. |

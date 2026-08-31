@@ -10,10 +10,13 @@
 
 import type * as auth from "../auth.js";
 import type * as changes from "../changes.js";
+import type * as courses from "../courses.js";
 import type * as crons from "../crons.js";
+import type * as deadlines from "../deadlines.js";
 import type * as dev_fixtures from "../dev/fixtures.js";
 import type * as dev_seed from "../dev/seed.js";
 import type * as http from "../http.js";
+import type * as inbound from "../inbound.js";
 import type * as ingest_canvas from "../ingest/canvas.js";
 import type * as ingest_ical from "../ingest/ical.js";
 import type * as ingest_pollAll from "../ingest/pollAll.js";
@@ -42,6 +45,7 @@ import type * as nightly from "../nightly.js";
 import type * as planner from "../planner.js";
 import type * as signals from "../signals.js";
 import type * as students from "../students.js";
+import type * as tasks from "../tasks.js";
 import type * as voice from "../voice.js";
 
 import type {
@@ -53,10 +57,13 @@ import type {
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   changes: typeof changes;
+  courses: typeof courses;
   crons: typeof crons;
+  deadlines: typeof deadlines;
   "dev/fixtures": typeof dev_fixtures;
   "dev/seed": typeof dev_seed;
   http: typeof http;
+  inbound: typeof inbound;
   "ingest/canvas": typeof ingest_canvas;
   "ingest/ical": typeof ingest_ical;
   "ingest/pollAll": typeof ingest_pollAll;
@@ -85,6 +92,7 @@ declare const fullApi: ApiFromModules<{
   planner: typeof planner;
   signals: typeof signals;
   students: typeof students;
+  tasks: typeof tasks;
   voice: typeof voice;
 }>;
 
