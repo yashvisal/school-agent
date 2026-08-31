@@ -50,7 +50,9 @@ next-env.d.ts
 
 .vercel
 
-# eve build/discovery artifacts
+# eve (agent runtimes): build/discovery artifacts, dev caches, auto-installed optional peers
+agent/**/.eve/
+agent/**/node_modules/
 .eve/
 .output/
 
@@ -59,3 +61,6 @@ agent/voice/.spike/
 
 # local dev/tunnel logs (spike)
 /.logs/
+
+# local lint report
+.lint.json

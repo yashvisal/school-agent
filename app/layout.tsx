@@ -1,10 +1,4 @@
-import {
-  ClerkProvider,
-  Show,
-  SignInButton,
-  SignUpButton,
-  UserButton,
-} from "@clerk/nextjs"
+import { ClerkProvider } from "@clerk/nextjs"
 import { Geist_Mono, Inter } from "next/font/google"
 
 import "./globals.css"
@@ -20,6 +14,11 @@ const fontMono = Geist_Mono({
   variable: "--font-mono",
 })
 
+/**
+ * Providers only. The chrome lives in `app/(app)/layout.tsx` → `AppShell`
+ * (nav sidebar | viewport | adaptive rail); the signed-out prompt and the
+ * account/theme controls moved into the shell's sidebar footer.
+ */
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -40,15 +39,6 @@ export default function RootLayout({
         <ClerkProvider>
           <ConvexClientProvider>
             <ThemeProvider>
-              <header className="flex h-12 items-center justify-end gap-2 border-b px-4 text-sm">
-                <Show when="signed-out">
-                  <SignInButton />
-                  <SignUpButton />
-                </Show>
-                <Show when="signed-in">
-                  <UserButton />
-                </Show>
-              </header>
               {children}
               <DevTools />
             </ThemeProvider>
