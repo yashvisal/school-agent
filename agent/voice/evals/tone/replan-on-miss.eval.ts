@@ -61,9 +61,9 @@ export default defineEval({
       .label("honesty-and-no-links")
       .gate(0.8);
 
-    // Signal capture ("went out" is an availability signal) is desirable but not yet
-    // a hard requirement — `.soft()` demotes this gate to tracked data
-    // (evals/assertions.mdx: `t.calledTool("get_weather").soft()`).
-    t.calledTool("recordSignal").soft();
+    // Signal capture is load-bearing (vision §4b: every surface writes signals
+    // from day one), and "went out" is an unambiguous availability signal — a
+    // replan that doesn't record it is a regression, so this is a hard gate.
+    t.calledTool("recordSignal");
   },
 });

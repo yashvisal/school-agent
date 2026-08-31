@@ -17,7 +17,7 @@ const arg = (name, fallback) => {
 }
 
 const base = arg("base", process.env.VOICE_BASE_URL ?? "http://localhost:3002")
-const url = `${base.replace(/\/$/, "")}/eve/agents/voice/eve/v1/trigger`
+const url = `${base.replace(/\/$/, "")}${arg("path", "/eve/agents/voice/eve/v1/trigger")}`
 const secret = process.env.VOICE_TRIGGER_SECRET
 if (!secret) {
   console.error("VOICE_TRIGGER_SECRET is not set in .env.local")
@@ -35,8 +35,11 @@ const body = {
   operationId: arg("operationId", `op_${Date.now()}`),
   kind: arg("kind", "morning"),
 }
-const date = arg("date")
-if (date) body.date = date
+// `date` is required and must be the STUDENT's local calendar day (the Convex
+// cron computes this per student; here we stand in for it with the demo
+// student's timezone from fixtures/student-demo.json).
+const tz = "America/New_York"
+body.date = arg("date", new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date()))
 
 const startedAt = Date.now()
 const res = await fetch(url, {

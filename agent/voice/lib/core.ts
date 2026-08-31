@@ -90,10 +90,18 @@ function zonedParts(date: Date, timeZone: string) {
   }
 }
 
-/** Today (or `offsetDays` from today) as an ISO date in the student's timezone. */
+/**
+ * Today (or `offsetDays` from today) as an ISO date in the student's timezone.
+ * Offsets are applied as CALENDAR days on the local date, not as elapsed
+ * milliseconds — a fall-back DST day is 25h long, and +86.4M ms across it
+ * would return the same local date twice.
+ */
 export function localDate(timeZone: string, offsetDays = 0): string {
-  const d = new Date(Date.now() + offsetDays * 86_400_000)
-  return zonedParts(d, timeZone).isoDate
+  const today = zonedParts(new Date(), timeZone).isoDate
+  if (offsetDays === 0) return today
+  const d = new Date(`${today}T12:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + offsetDays)
+  return d.toISOString().slice(0, 10)
 }
 
 function weekdayOf(isoDate: string): number {
@@ -164,6 +172,17 @@ function freeWindows(isoDate: string, timeZone: string, hardStopMin: number): Wi
 export function getFeasibleActionsFor(student: Student, date?: string): FeasibleActions {
   const tz = student.timezone
   const isoDate = date ?? localDate(tz, 1)
+
+  // A past date has no feasible windows by definition; returning options for it
+  // would let the model persist a plan for a day that already happened.
+  if (isoDate < localDate(tz, 0)) {
+    return {
+      student: { firstName: student.firstName, timezone: tz },
+      date: isoDate,
+      options: [],
+      pendingChanges: [],
+    }
+  }
 
   const coursesById = new Map(fixture.courses.map((c) => [c.courseId, c]))
   const deadlinesById = new Map(fixture.deadlines.map((d) => [d.deadlineId, d]))

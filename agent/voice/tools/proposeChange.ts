@@ -12,7 +12,12 @@ import { resolveStudent } from "../lib/students.js"
  * `confirmedInline` records — nothing from chat lands in the web queue.
  *
  * SPIKE STUB: appends to `.spike/changes.jsonl`.
- * TODO(core): call the Convex `proposeChange` mutation.
+ * TODO(core): call the Convex `proposeChange` mutation. `confirmedInline` is a
+ * MODEL CLAIM and must not be trusted at application time: Core's approval
+ * pipeline owns the decision, and should bind an inline approval to
+ * independent evidence (the confirming inbound message id / turn id in the
+ * same exchange) before applying — otherwise the change stays pending. The
+ * tool boundary cannot verify the transcript it is part of.
  */
 export default defineTool({
   description: [

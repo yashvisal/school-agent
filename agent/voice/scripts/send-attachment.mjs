@@ -78,12 +78,14 @@ const space = await im.space.create(phone)
 console.log(`space id (chat GUID): ${space.id}  type=${space.type}  line=${space.phone}`)
 console.log(`eve threadId          : imessage:${space.id}~${space.phone}`)
 
+let failures = 0
 const send = async (label, content) => {
   const t0 = Date.now()
   try {
     const sent = await space.send(content)
     console.log(`  ok   ${label} -> id=${sent?.id ?? "(none)"} in ${Date.now() - t0}ms`)
   } catch (error) {
+    failures += 1
     console.log(`  FAIL ${label} -> ${String(error)}`)
   }
 }
@@ -94,4 +96,4 @@ if (!args.includes("--text-only")) {
   await send("png", attachment(pngPath, { mimeType: "image/png", name: "voice-spike.png" }))
 }
 
-process.exit(0)
+process.exit(failures > 0 ? 1 : 0)

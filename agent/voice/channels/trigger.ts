@@ -21,10 +21,10 @@ const TriggerBody = z.object({
   phone: z.string().regex(/^\+[1-9]\d{6,14}$/, "Use E.164, e.g. +15551234567."),
   operationId: z.string().min(1),
   kind: z.enum(["morning", "checkin"]),
-  date: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .optional(),
+  // Required, and computed by the caller in the STUDENT's timezone (voice.md
+  // M1 #2: Convex decides who gets a run and hands it what's true). Deriving a
+  // default here from UTC could plan the wrong calendar day.
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 })
 
 /**
@@ -96,7 +96,7 @@ export default defineChannel({
       seenOperations.add(operationId)
 
       const threadId = imessageThreadId(phone)
-      const day = date ?? new Date().toISOString().slice(0, 10)
+      const day = date
 
       const startedAt = Date.now()
       let session
@@ -106,7 +106,10 @@ export default defineChannel({
           .send(triggerPrompt(kind, day), { auth: photonPrincipal(phone) })
       } catch (error) {
         seenOperations.delete(operationId)
-        console.error("[voice/trigger] hand-off failed", { threadId, error: String(error) })
+        console.error("[voice/trigger] hand-off failed", {
+          to: `…${phone.slice(-4)}`,
+          error: String(error),
+        })
         return Response.json({ error: String(error), threadId }, { status: 502 })
       }
 
@@ -114,7 +117,7 @@ export default defineChannel({
         operationId,
         kind,
         date: day,
-        threadId,
+        to: `…${phone.slice(-4)}`,
         sessionId: session.id,
         handoffMs: Date.now() - startedAt,
       })
