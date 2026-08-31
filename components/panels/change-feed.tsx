@@ -167,8 +167,11 @@ export function ChangeFeed({
     )
   }
 
+  /* Only an approval takes a row out of `pending`. "Fix" opens an inline
+   * correction that doesn't exist yet, so hiding the row on that click would
+   * claim work nobody did — it stays until the correction is actually made. */
   const pending = changes.filter(
-    (c) => c.status === "pending" && !resolved[c._id]
+    (c) => c.status === "pending" && resolved[c._id] !== "approved"
   )
   /* An approval must leave a trace, not just vanish: until `api.changes.approve`
    * flips the row's status in Core, keep the locally-approved change visible at

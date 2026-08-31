@@ -146,6 +146,7 @@ export default function CodeBlock({
   const raw = code ?? lines.join("\n");
 
   const copy = useCallback(() => {
+    if (!navigator.clipboard?.writeText) return;
     navigator.clipboard
       .writeText(raw)
       .then(() => {
