@@ -50,8 +50,11 @@ the document says is due. These are NOT deadlines and must never be emitted:
 - a reading listed next to a lecture's topic as preparation for that lecture;
 - a holiday or a "no class" day;
 - a COUNT of future work ("there will be 6 problem sets", "ten psets, one per
-  week"). That is one sentence about a series, not six items. Emit nothing for
-  it unless the document names the individual items.
+  week"). That is one sentence about a series, not six items. Emit ONE undated
+  series item for it, never a numbered list. A policy sentence that mentions
+  one member in passing ("starting with Problem Set 1, late days…") does NOT
+  name the series — enumerate only when the document itself lists each item
+  with its own line, date, or topic.
 
 A RECURRENCE RULE IS NOT A LIST OF DATES. "Ten problem sets, posted Friday and
 due the following Friday", "weekly quizzes", "readings due each Monday" — you

@@ -368,3 +368,72 @@ describe("describeSchedule", () => {
     expect(describeSchedule([])).toMatch(/No class blocks/)
   })
 })
+
+describe("enumerated series collapse", () => {
+  const series = (n: number, sourceText: string, extra: Record<string, unknown> = {}) =>
+    Array.from({ length: n }, (_, i) => ({
+      title: `Problem Set ${i + 1}`,
+      kind: "homework" as const,
+      confidence: 0.5,
+      sourceText,
+      ...extra,
+    }))
+
+  test("numbered, undated items quoting one sentence collapse to one series item", () => {
+    // What the model did on one temperature-0 run of the MIT fixture: six
+    // fabricated items from "There will be 6 problem sets in the course."
+    const extraction = parseSyllabus({
+      course: { name: "6.0001" },
+      deadlines: series(6, "There will be 6 problem sets in the course."),
+    })
+    const result = normalizeSyllabusExtraction({
+      extraction,
+      timezone: NY,
+      source: "syllabus",
+      semester: FALL_2016,
+    })
+    expect(result.deadlines.map((d) => d.title)).toEqual(["Problem Set"])
+    expect(result.dropped).toHaveLength(5)
+    expect(result.dropped[0].reason).toMatch(/enumerated from one sentence/)
+  })
+
+  test("individually listed items (different quotes) are never collapsed", () => {
+    const extraction = parseSyllabus({
+      course: { name: "6.0001" },
+      deadlines: [1, 2, 3].map((i) => ({
+        title: `Problem Set ${i}`,
+        kind: "homework" as const,
+        confidence: 0.9,
+        sourceText: `Problem Set ${i}: topic ${i}, due week ${i + 1}`,
+      })),
+    })
+    const result = normalizeSyllabusExtraction({
+      extraction,
+      timezone: NY,
+      source: "syllabus",
+      semester: FALL_2016,
+    })
+    expect(result.deadlines).toHaveLength(3)
+    expect(result.dropped).toEqual([])
+  })
+
+  test("dated items are never collapsed, and two look-alikes are not a series", () => {
+    const dated = parseSyllabus({
+      course: { name: "6.0001" },
+      deadlines: series(3, "Problem sets are due on the dates below.", { dueMonthDay: "10-01" }),
+    })
+    expect(
+      normalizeSyllabusExtraction({ extraction: dated, timezone: NY, source: "syllabus", semester: FALL_2016 })
+        .deadlines
+    ).toHaveLength(3)
+
+    const two = parseSyllabus({
+      course: { name: "6.0001" },
+      deadlines: series(2, "There will be 6 problem sets in the course."),
+    })
+    expect(
+      normalizeSyllabusExtraction({ extraction: two, timezone: NY, source: "syllabus", semester: FALL_2016 })
+        .deadlines
+    ).toHaveLength(2)
+  })
+})

@@ -209,6 +209,63 @@ function withinSemester(date: string, semester?: SemesterWindow): boolean {
   return true
 }
 
+/**
+ * Minimum run of numbered, undated, identically-sourced items that counts as
+ * an enumeration rather than a coincidence.
+ */
+export const SERIES_COLLAPSE_MIN = 3
+
+const SERIES_TITLE_RE = /^(.*?[a-z])\s*#?\s*(\d{1,2})$/i
+
+/**
+ * The model sometimes turns "there will be 6 problem sets" into Problem Set 1…6
+ * — undated, so the invented-date guard is silent, but six fabricated items all
+ * the same. The prompt forbids it; at temperature 0 it still happens on some
+ * runs, so the invariant is enforced HERE, deterministically (vision §10: the
+ * model extracts, code owns the invariants).
+ *
+ * The signal is strict on purpose: three or more items whose titles differ
+ * only by a trailing number, none carrying a date, all quoting the *identical*
+ * `sourceText`. Six items citing one sentence were manufactured from that
+ * sentence. Genuinely listed items (each with its own line, date, or topic)
+ * quote different text and are untouched. The run collapses to ONE undated
+ * series item titled with the shared stem; the rest are recorded as dropped
+ * with the reason, so the audit trail shows what the model tried.
+ */
+export function collapseEnumeratedSeries(items: ExtractedDeadline[]): {
+  items: ExtractedDeadline[]
+  dropped: DroppedItem[]
+} {
+  const groups = new Map<string, number[]>()
+  items.forEach((item, index) => {
+    if (item.dueDate !== undefined || item.dueMonthDay !== undefined) return
+    const match = SERIES_TITLE_RE.exec(item.title.trim())
+    if (!match) return
+    const stem = match[1].trim().toLowerCase()
+    const key = `${stem}\u0000${item.sourceText.trim()}`
+    groups.set(key, [...(groups.get(key) ?? []), index])
+  })
+
+  const collapsed = new Set<number>()
+  const dropped: DroppedItem[] = []
+  for (const indexes of groups.values()) {
+    if (indexes.length < SERIES_COLLAPSE_MIN) continue
+    const [keep, ...rest] = indexes
+    const stem = SERIES_TITLE_RE.exec(items[keep].title.trim())?.[1].trim() ?? items[keep].title
+    items[keep] = { ...items[keep], title: stem }
+    for (const index of rest) {
+      collapsed.add(index)
+      dropped.push({
+        title: items[index].title,
+        reason:
+          `enumerated from one sentence ("${items[index].sourceText.trim().slice(0, 80)}…") — ` +
+          `collapsed into the series item "${stem}"`,
+      })
+    }
+  }
+  return { items: items.filter((_, index) => !collapsed.has(index)), dropped }
+}
+
 export function normalizeSyllabusExtraction(
   input: NormalizeSyllabusInput
 ): NormalizedExtraction {
@@ -217,7 +274,10 @@ export function normalizeSyllabusExtraction(
   const deadlines: NormalizedDeadline[] = []
   const seen = new Set<string>()
 
-  for (const item of extraction.deadlines) {
+  const series = collapseEnumeratedSeries([...extraction.deadlines])
+  dropped.push(...series.dropped)
+
+  for (const item of series.items) {
     const title = item.title.trim()
     if (title.length === 0) {
       dropped.push({ title: item.title, reason: "empty title" })
