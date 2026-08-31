@@ -18,9 +18,18 @@ import { resolveStudent, sessionPhone } from "../lib/students.js"
  * reports nothing yields zeros, which the row still records (a call happened).
  *
  * `studentId` is best-effort: resolved from the session's Photon principal via
- * the cached resolveStudent. A failure to attribute — or to log at all — must
- * never break the turn; it is shouted to the log instead.
+ * the cached resolveStudent.
+ *
+ * Failure posture (review-discussed): the write is retried with short backoff,
+ * then shouted to the log. It deliberately does NOT fail the turn — the
+ * student's conversation outranks bookkeeping — and there is no durable replay
+ * queue in eve, because nothing durable may live in eve (the truth rule,
+ * vision §10). If retries ever prove insufficient, the fix is a Core-side
+ * reconciliation against eve's traces, not eve-side persistence.
  */
+
+/** Backoff before each attempt; three tries covers a transient blip. */
+const RETRY_DELAYS_MS = [0, 500, 2000]
 export default defineHook({
   events: {
     async "step.completed"(event, ctx) {
@@ -48,30 +57,39 @@ export default defineHook({
         (usage.cacheReadTokens ?? 0) +
         (usage.cacheWriteTokens ?? 0)
 
-      try {
-        const { usageId } = await logUsage({
-          studentId,
-          surface: "voice",
-          model: MODEL,
-          promptTokens,
-          completionTokens: usage.outputTokens ?? 0,
-          costUsd: usage.costUsd,
-          sessionId: ctx.session.id,
-        })
-        console.info("[voice/usage]", {
-          usageId,
-          sessionId: ctx.session.id,
-          turnId: event.data.turnId,
-          stepIndex: event.data.stepIndex,
-          promptTokens,
-          completionTokens: usage.outputTokens ?? 0,
-          costUsd: usage.costUsd,
-          finishReason: event.data.finishReason,
-        })
-      } catch (error) {
-        // Loud, because a silent gap here is an unmetered LLM call.
-        console.error("[voice/usage] FAILED to log usage row", String(error))
+      let lastError: unknown
+      for (const delayMs of RETRY_DELAYS_MS) {
+        if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs))
+        try {
+          const { usageId } = await logUsage({
+            studentId,
+            surface: "voice",
+            model: MODEL,
+            promptTokens,
+            completionTokens: usage.outputTokens ?? 0,
+            costUsd: usage.costUsd,
+            sessionId: ctx.session.id,
+          })
+          console.info("[voice/usage]", {
+            usageId,
+            sessionId: ctx.session.id,
+            turnId: event.data.turnId,
+            stepIndex: event.data.stepIndex,
+            promptTokens,
+            completionTokens: usage.outputTokens ?? 0,
+            costUsd: usage.costUsd,
+            finishReason: event.data.finishReason,
+          })
+          return
+        } catch (error) {
+          lastError = error
+        }
       }
+      // Loud, because a silent gap here is an unmetered LLM call.
+      console.error(
+        `[voice/usage] FAILED to log usage row after ${RETRY_DELAYS_MS.length} attempts`,
+        String(lastError)
+      )
     },
   },
 })
