@@ -196,6 +196,9 @@ export type StudentSignal = {
   taskId?: Id
   origin: "chat" | "workspace" | "web" | "observed"
   observedAt: string
+  /** signals are facts too, so they carry provenance like everything else
+   * (core.md `studentSignals`; vision §10 "facts, not inference") */
+  provenance: Provenance
 }
 
 /** The identity Convex sees for the signed-in student (`api.auth.viewer`). */

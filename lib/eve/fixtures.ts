@@ -290,5 +290,10 @@ export const REPLAY_FRAMES: readonly ReplayFrame[] = [
   },
 ]
 
-/** The frame with the open approval — the one the founder needs to see. */
-export const APPROVAL_FRAME_INDEX = 6
+/**
+ * The frame with the open approval — the one the founder needs to see. Derived
+ * from the label so inserting a frame can't silently point it somewhere else.
+ */
+export const APPROVAL_FRAME_INDEX = REPLAY_FRAMES.findIndex((f) =>
+  f.label.startsWith("approval requested")
+)

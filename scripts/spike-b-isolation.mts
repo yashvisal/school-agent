@@ -96,8 +96,27 @@ async function probeTurn(
   return rows
 }
 
-function filesFor(rows: readonly ProbeRecord[], index: number): string[] {
-  return [...(rows[index]?.files ?? [])]
+/**
+ * Every session appends to the same NDJSON file, so select by identity rather
+ * than by array position: an extra record would otherwise shift the indexes and
+ * make an assertion inspect the wrong session's observation.
+ */
+function lastFor(
+  rows: readonly ProbeRecord[],
+  sessionId: string,
+  action?: string,
+): ProbeRecord | undefined {
+  return rows
+    .filter(
+      (r) =>
+        r.sessionId === sessionId &&
+        (action === undefined || r.actions?.includes(action) === true),
+    )
+    .at(-1)
+}
+
+function filesFor(record: ProbeRecord | undefined): string[] {
+  return [...(record?.files ?? [])]
 }
 
 async function runProbeMode(client: Client): Promise<void> {
@@ -109,24 +128,26 @@ async function runProbeMode(client: Client): Promise<void> {
   const a = await client.sessions.create({ message: "SPIKE_B_MARK" })
   const rows0 = await waitForProbe(1, "A mark")
   await a.session.cancel().catch(() => undefined)
-  const sessionA = rows0[0]!.sessionId
-  const sandboxA = rows0[0]!.sandboxId ?? "<none>"
+  const a1 = rows0[0]!
+  const sessionA = a1.sessionId
+  const sandboxA = a1.sandboxId ?? "<none>"
   const markerA = `marker-${sessionA}.txt`
+  const a1Files = filesFor(lastFor(rows0, sessionA, "mark"))
 
   check(
     "A1 probe reached a live sandbox",
-    rows0[0]?.error === undefined && sandboxA !== "<none>",
-    `sandboxId=${sandboxA} error=${rows0[0]?.error ?? "none"}`,
+    a1.error === undefined && sandboxA !== "<none>",
+    `sandboxId=${sandboxA} error=${a1.error ?? "none"}`,
   )
   check(
     "A1 marker written and visible in session A",
-    filesFor(rows0, 0).includes(markerA),
-    `${markerA} in [${filesFor(rows0, 0).join(", ")}]`,
+    a1Files.includes(markerA),
+    `${markerA} in [${a1Files.join(", ")}]`,
   )
   check(
     "A1 onSession hydrated SESSION.md",
-    filesFor(rows0, 0).includes("SESSION.md"),
-    `files=[${filesFor(rows0, 0).join(", ")}]`,
+    a1Files.includes("SESSION.md"),
+    `files=[${a1Files.join(", ")}]`,
   )
 
   // 1: session B — a different durable session of the SAME agent
@@ -134,14 +155,17 @@ async function runProbeMode(client: Client): Promise<void> {
   const b = await client.sessions.create({ message: "SPIKE_B_LIST" })
   const rows1 = await waitForProbe(2, "B list")
   await b.session.cancel().catch(() => undefined)
-  const sessionB = rows1[1]!.sessionId
-  const sandboxB = rows1[1]!.sandboxId ?? "<none>"
-  const leaked = filesFor(rows1, 1).includes(markerA)
+  const b1 = rows1.find((r) => r.sessionId !== sessionA)
+  if (!b1) throw new Error("session B produced no probe record")
+  const sessionB = b1.sessionId
+  const sandboxB = b1.sandboxId ?? "<none>"
+  const b1Files = filesFor(b1)
+  const leaked = b1Files.includes(markerA)
 
   check(
     "B1 cannot see session A's marker   [DISQUALIFYING]",
     !leaked,
-    `${markerA} ${leaked ? "LEAKED into" : "absent from"} B: [${filesFor(rows1, 1).join(", ")}]`,
+    `${markerA} ${leaked ? "LEAKED into" : "absent from"} B: [${b1Files.join(", ")}]`,
   )
   check(
     "B1 sandbox id differs from A       [DISQUALIFYING]",
@@ -150,45 +174,52 @@ async function runProbeMode(client: Client): Promise<void> {
   )
   check(
     "B1 got its own hydrated SESSION.md",
-    filesFor(rows1, 1).includes("SESSION.md"),
-    `files=[${filesFor(rows1, 1).join(", ")}]`,
+    b1Files.includes("SESSION.md"),
+    `files=[${b1Files.join(", ")}]`,
   )
 
   // 2: session A, second turn — persistence within a durable session
   console.log("\nSession A — SPIKE_B_LIST (second turn: persistence)")
   const rows2 = await probeTurn(a.session, "SPIKE_B_LIST", 3)
+  const a2 = lastFor(rows2, sessionA, "list")
+  const a2Files = filesFor(a2)
   check(
     "A2 marker persists across turns in the same session",
-    filesFor(rows2, 2).includes(markerA),
-    `${markerA} in [${filesFor(rows2, 2).join(", ")}]`,
+    a2Files.includes(markerA),
+    `${markerA} in [${a2Files.join(", ")}]`,
   )
   check(
     "A2 same sandbox id across turns",
-    rows2[2]?.sandboxId === sandboxA,
-    `${rows2[2]?.sandboxId ?? "<none>"} === ${sandboxA}`,
+    a2?.sandboxId === sandboxA,
+    `${a2?.sandboxId ?? "<none>"} === ${sandboxA}`,
   )
   check(
     "A2 still cannot see anything of B's",
-    !filesFor(rows2, 2).includes(`marker-${sessionB}.txt`),
-    `files=[${filesFor(rows2, 2).join(", ")}]`,
+    !a2Files.includes(`marker-${sessionB}.txt`),
+    `files=[${a2Files.join(", ")}]`,
   )
 
   // 3-4: session B — delete the sandbox, then re-open it
   console.log("\nSession B — SPIKE_B_MARK then SPIKE_B_DELETE (teardown)")
   await probeTurn(b.session, "SPIKE_B_MARK", 4)
   const markerB = `marker-${sessionB}.txt`
+  const b2Files = filesFor(lastFor(readProbe(), sessionB, "mark"))
   check(
     "B2 marker written in B",
-    filesFor(readProbe(), 3).includes(markerB),
-    `${markerB} in [${filesFor(readProbe(), 3).join(", ")}]`,
+    b2Files.includes(markerB),
+    `${markerB} in [${b2Files.join(", ")}]`,
   )
 
   const rows6 = await probeTurn(b.session, "SPIKE_B_DELETE", 6)
-  const afterDelete = filesFor(rows6, 5)
+  const deleted = lastFor(rows6, sessionB, "delete")
+  const reopened = lastFor(rows6, sessionB, "reopen-after-delete")
+  const afterDelete = filesFor(reopened)
   check(
     "B3 sandbox.delete() succeeded",
-    rows6[4]?.error === undefined && rows6[5]?.error === undefined,
-    `${rows6[4]?.actions?.join("+") ?? "?"} -> ${rows6[5]?.actions?.join("+") ?? "?"}`,
+    deleted?.error === undefined &&
+      reopened !== undefined &&
+      reopened.error === undefined,
+    `${deleted?.actions?.join("+") ?? "?"} -> ${reopened?.actions?.join("+") ?? "?"}`,
   )
   check(
     "B3 delete discarded the workspace (marker gone)",

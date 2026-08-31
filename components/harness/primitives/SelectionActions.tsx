@@ -483,6 +483,7 @@ export default function SelectionActions({
                   ))}
 
                   <div
+                    inert={!expanded}
                     className="flex min-w-0 items-center gap-0.5 overflow-hidden transition-[max-width,opacity,margin] duration-400"
                     style={{
                       maxWidth: expanded ? 262 : 0,
@@ -527,6 +528,9 @@ export default function SelectionActions({
                 </div>
 
                 <div
+                  /* collapsed: max-width/opacity don't remove the button from
+                   * the tab order, `inert` does */
+                  inert={!hasPrompt}
                   className="flex min-w-0 items-center overflow-hidden transition-[max-width,opacity,transform] duration-400"
                   style={{
                     maxWidth: hasPrompt ? 30 : 0,

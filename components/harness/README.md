@@ -40,9 +40,10 @@ close to upstream so we can re-pull fixes; deviations are listed below and marke
   adjustment), `ApprovalCard` / `PromptBar` / `RecordsTable` (synchronous `setState` inside
   effects deferred by one frame or moved to render-time state adjustment), `Flowchart` (the
   node ref map replaced with `data-node-id` DOM queries; the dragging id mirrored into state).
-- `StreamingText` still uses `<img>` for remote favicons (three `@next/next/no-img-element`
-  warnings). `next/image` would need `images.remotePatterns` in `next.config.ts`, which the Face
-  workstream does not own.
+- `StreamingText` still uses `<img>` for its three source avatars (three
+  `@next/next/no-img-element` warnings). The avatars are inline `data:image/svg+xml` URIs defined
+  in the component, so `next/image` would need `unoptimized` or a custom loader to accept them —
+  not worth it for a demo component. The warnings are accepted rather than worked around.
 
 ## CSS
 

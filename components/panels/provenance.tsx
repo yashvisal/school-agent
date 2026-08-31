@@ -84,10 +84,13 @@ export function ProvenanceTrigger({
         createPortal(
           <div
             data-provenance
-            className="fixed z-50 w-75 overflow-hidden rounded-window bg-surface shadow-overlay"
+            className="fixed z-50 w-75 overflow-y-auto rounded-window bg-surface shadow-overlay"
             style={{
               left: box.x,
               top: box.y,
+              /* the 240px reserved above is a floor, not the real height —
+               * scroll rather than clip when the content is taller. */
+              maxHeight: `calc(100dvh - ${box.y}px - 12px)`,
               animation: "pop-in 160ms cubic-bezier(0.23,1,0.32,1) both",
               transformOrigin: "top left",
             }}

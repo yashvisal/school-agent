@@ -146,11 +146,16 @@ export default function CodeBlock({
   const raw = code ?? lines.join("\n");
 
   const copy = useCallback(() => {
-    navigator.clipboard.writeText(raw).then(() => {
-      setCopied(true);
-      onCopy?.(raw);
-      setTimeout(() => setCopied(false), 1500);
-    });
+    navigator.clipboard
+      .writeText(raw)
+      .then(() => {
+        setCopied(true);
+        onCopy?.(raw);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      /* insecure context, unfocused document, denied permission — fail quietly
+       * rather than throwing an unhandled rejection */
+      .catch(() => undefined);
   }, [raw, onCopy]);
 
   const added = diff.filter((r) => r.type === "add").length;

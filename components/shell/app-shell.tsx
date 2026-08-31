@@ -27,7 +27,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       /** width of the adaptive rail */
       railWidth: [360, 260, 520] as [number, number, number],
     },
-    { id: "shell", persist: true }
+    /* Persist only in dev: DialKit hides its panel in production but still
+     * reads `dialkit:shell` from localStorage, so a tuned value would silently
+     * override the shipped shell defaults. */
+    { id: "shell", persist: process.env.NODE_ENV !== "production" }
   )
 
   return (

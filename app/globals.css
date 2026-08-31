@@ -408,10 +408,12 @@ a {
 }
 
 
+/* No `border-radius` here: it would reshape the focused element itself (the
+ * rounded-full sign-in and theme buttons snap to a 4px rectangle on focus).
+ * The outline already follows each element's own corner radius. */
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-  border-radius: 4px;
 }
 
 input:focus-visible,

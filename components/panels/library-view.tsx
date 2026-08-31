@@ -1,6 +1,12 @@
 "use client"
 
-import { EmptyState, SectionHeader, ViewportBody, ViewportHeader } from "@/components/panels/chrome"
+import {
+  EmptyState,
+  LoadingRows,
+  SectionHeader,
+  ViewportBody,
+  ViewportHeader,
+} from "@/components/panels/chrome"
 import { useCourses, useSources } from "@/lib/data/hooks"
 
 /**
@@ -12,7 +18,9 @@ export function LibraryView() {
   const courses = useCourses()
   const sources = useSources()
 
-  const syllabi = sources?.find((s) => s.kind === "syllabus")
+  /* Count syllabi only from the syllabus source — courses are a different
+   * entity and would state a number that isn't about files at all. */
+  const syllabusCount = sources?.find((s) => s.kind === "syllabus")?.covers.length ?? 0
 
   return (
     <>
@@ -20,10 +28,18 @@ export function LibraryView() {
       <ViewportBody>
         <section className="flex flex-col gap-3">
           <SectionHeader title="Nothing here yet" />
-          <EmptyState
-            line={`${syllabi ? syllabi.covers.length : courses?.length ?? 0} syllabi are already in the system — they became deadlines and grading schemes, not files.`}
-            detail="The Library fills up when the workspace agent starts building things: a primer before a quiz, a review outline for a pset, notes from a lesson. Course materials the agent pulls from Canvas land here too. Until there's an artifact worth keeping, there's nothing to file."
-          />
+          {sources === undefined ? (
+            <LoadingRows rows={1} />
+          ) : (
+            <EmptyState
+              line={
+                syllabusCount === 1
+                  ? "1 syllabus is already in the system — it became deadlines and a grading scheme, not a file."
+                  : `${syllabusCount} syllabi are already in the system — they became deadlines and grading schemes, not files.`
+              }
+              detail="The Library fills up when the workspace agent starts building things: a primer before a quiz, a review outline for a pset, notes from a lesson. Course materials the agent pulls from Canvas land here too. Until there's an artifact worth keeping, there's nothing to file."
+            />
+          )}
         </section>
 
         <section className="flex flex-col gap-3">

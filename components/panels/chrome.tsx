@@ -94,7 +94,12 @@ export function LoadingRows({ rows = 3 }: { rows?: number }) {
         <div
           key={i}
           className="h-11 rounded-card bg-surface shadow-card"
-          style={{ animation: `fade-in 400ms ease-out ${i * 60}ms both`, opacity: 0.6 }}
+          /* dim with `filter`, not `opacity`: `fade-in` animates opacity to 1
+           * and `both` keeps that final keyframe, which would win here. */
+          style={{
+            animation: `fade-in 400ms ease-out ${i * 60}ms both`,
+            filter: "opacity(0.6)",
+          }}
         />
       ))}
     </div>

@@ -27,11 +27,13 @@ import {
  * `text` → prose, `dynamic-tool` → tool chips, and a gated `propose_change` →
  * an approval card with a diff table wired to `respond()`.
  *
- * **Replay mode.** The AI Gateway account is blocked
- * (`customer_verification_required`), so no live turn can run yet. In dev,
- * `?replay=1` walks `lib/eve/fixtures.ts` through the *same* reducer and the
- * *same* renderers, so the card and the diff are visible in the browser today.
- * The live path is the default and needs no change when the gateway is funded.
+ * The live path is the default and has run end-to-end in `next dev` against
+ * `anthropic/claude-haiku-4.5`. Production browser traffic still 401s until the
+ * Clerk verifier lands in `agent/workspace/channels/eve.ts` (TODO(face) there).
+ *
+ * **Replay mode.** In dev, `?replay=1` walks `lib/eve/fixtures.ts` through the
+ * *same* reducer and the *same* renderers, so the card and the diff are
+ * demoable with the gateway down and cost nothing to look at.
  */
 
 /* ────────────────────────────────────────────────────────────
@@ -59,7 +61,7 @@ function ThinkingRow({ text, streaming }: { text: string; streaming: boolean }) 
       <span
         aria-hidden
         className={`mt-1.5 size-1.5 shrink-0 rounded-full bg-ink-3 ${
-          streaming ? "animate-pulse" : ""
+          streaming ? "motion-safe:animate-pulse" : ""
         }`}
       />
       <p className="text-[12px] leading-relaxed text-ink-3">{text}</p>
@@ -74,7 +76,7 @@ function TextRow({ text, streaming }: { text: string; streaming: boolean }) {
       {streaming && (
         <span
           aria-hidden
-          className="ml-0.5 inline-block h-[1em] w-[2px] translate-y-[2px] animate-pulse bg-ink-2"
+          className="ml-0.5 inline-block h-[1em] w-[2px] translate-y-[2px] bg-ink-2 motion-safe:animate-pulse"
         />
       )}
     </p>
@@ -86,7 +88,7 @@ function ToolRow({ label, preparing }: { label: string; preparing: boolean }) {
     <div className="flex items-center gap-2 px-0.5">
       <ToolChip>{label}</ToolChip>
       {preparing && (
-        <span aria-hidden className="size-1.5 animate-pulse rounded-full bg-ink-3" />
+        <span aria-hidden className="size-1.5 rounded-full bg-ink-3 motion-safe:animate-pulse" />
       )}
     </div>
   )
@@ -148,10 +150,18 @@ function ApprovalRow({
   busy: boolean
   onRespond: (requestId: string, optionId: string) => void
 }) {
+  /* Never let one option fill both roles: with a single non-canonical option
+   * the old fallbacks resolved to the same id, so pressing "Reject" approved
+   * the change. Fall back only when there really are two options. */
   const approve =
-    item.options.find((o) => o.id === APPROVE_OPTION_ID) ?? item.options.at(-1)
+    item.options.find((o) => o.id === APPROVE_OPTION_ID) ??
+    (item.options.length > 1 ? item.options.at(-1) : undefined)
   const reject =
-    item.options.find((o) => o.id === REJECT_OPTION_ID) ?? item.options.at(0)
+    item.options.find((o) => o.id === REJECT_OPTION_ID) ??
+    (item.options.length > 1 ? item.options.at(0) : undefined)
+  /* One unlabelled option: render it alone, with the server's own label. */
+  const single =
+    approve === undefined && reject === undefined ? item.options.at(0) : undefined
 
   return (
     <div className="overflow-hidden rounded-card bg-surface shadow-card">
@@ -194,6 +204,16 @@ function ApprovalRow({
               {approve.label}
             </Button>
           )}
+          {single && (
+            <Button
+              size="xs"
+              variant="primary"
+              disabled={busy}
+              onClick={() => onRespond(item.requestId, single.id)}
+            >
+              {single.label}
+            </Button>
+          )}
         </span>
       </div>
     </div>
@@ -203,6 +223,26 @@ function ApprovalRow({
 /* ────────────────────────────────────────────────────────────
  * Replay mode (dev only)
  * ──────────────────────────────────────────────────────────── */
+
+/**
+ * `prefers-reduced-motion`, read once for the rail. The reveal is an inline
+ * `animation`, so Tailwind's `motion-safe:` variant can't reach it.
+ */
+const REDUCE_MOTION_QUERY = "(prefers-reduced-motion: reduce)"
+
+function subscribeToMotionPreference(onChange: () => void): () => void {
+  const query = window.matchMedia(REDUCE_MOTION_QUERY)
+  query.addEventListener("change", onChange)
+  return () => query.removeEventListener("change", onChange)
+}
+
+function useReducedMotion(): boolean {
+  return React.useSyncExternalStore(
+    subscribeToMotionPreference,
+    () => window.matchMedia(REDUCE_MOTION_QUERY).matches,
+    () => false
+  )
+}
 
 function subscribeToLocation(onChange: () => void): () => void {
   window.addEventListener("popstate", onChange)
@@ -243,19 +283,35 @@ function useReplayFrames(): readonly EveMessage[] | null {
  * The rail
  * ──────────────────────────────────────────────────────────── */
 
+/**
+ * One durable eve session per student × course (face.md "Workspace filesystem =
+ * materialized view"). The shell outlives course navigation, so remount on
+ * `courseId`: a course switch must never continue the previous course's
+ * transcript. The durable form — server-side hydration handing this component an
+ * `initialSession` (`sessionId` + `streamIndex`) with `resume: true` — arrives
+ * with `hydrateWorkspace` in M3; this is the honest interim boundary.
+ */
 export function ChatRail({ courseId }: { courseId: string }) {
-  const dials = useDialKit("Chat rail", {
-    id: "chat-rail",
-    persist: true,
-    /** how long a new rail item takes to settle in */
-    revealMs: [220, 80, 600] as [number, number, number],
-    /** delay between consecutive items in the same paint */
-    staggerMs: [28, 0, 120] as [number, number, number],
-    /** minimum height of a collapsed result row */
-    rowHeight: [26, 20, 48] as [number, number, number],
-    /** vertical gap between rail items */
-    gap: [10, 4, 24] as [number, number, number],
-  })
+  return <CourseChatRail key={courseId} courseId={courseId} />
+}
+
+function CourseChatRail({ courseId }: { courseId: string }) {
+  const dials = useDialKit(
+    "Chat rail",
+    {
+      /** how long a new rail item takes to settle in */
+      revealMs: [220, 80, 600] as [number, number, number],
+      /** delay between consecutive items in the same paint */
+      staggerMs: [28, 0, 120] as [number, number, number],
+      /** minimum height of a collapsed result row */
+      rowHeight: [26, 20, 48] as [number, number, number],
+      /** vertical gap between rail items */
+      gap: [10, 4, 24] as [number, number, number],
+    },
+    /* `id`/`persist` are options, not dials — and persistence is dev-only so a
+     * tuned value can never override the shipped defaults in production. */
+    { id: "chat-rail", persist: process.env.NODE_ENV !== "production" }
+  )
 
   const agent = useEveAgent({ agent: "workspace" })
   const replayMessages = useReplayFrames()
@@ -267,6 +323,8 @@ export function ChatRail({ courseId }: { courseId: string }) {
 
   const [draft, setDraft] = React.useState("")
   const [failure, setFailure] = React.useState<string | null>(null)
+  const [responding, setResponding] = React.useState(false)
+  const reduceMotion = useReducedMotion()
   const scroller = React.useRef<HTMLDivElement>(null)
 
   React.useEffect(() => {
@@ -286,6 +344,9 @@ export function ChatRail({ courseId }: { courseId: string }) {
        * first, which is what a rail beside a document should do. */
       await agent.send(text, busy ? { turnPolicy: "steer" } : undefined)
     } catch (error) {
+      /* give the question back — retyping it is the worst possible tax on a
+       * failure the student didn't cause. */
+      setDraft((current) => (current.length === 0 ? text : current))
       setFailure(error instanceof Error ? error.message : String(error))
     }
   }, [agent, busy, disabled, draft])
@@ -294,10 +355,13 @@ export function ChatRail({ courseId }: { courseId: string }) {
     async (requestId: string, optionId: string) => {
       if (replaying) return
       setFailure(null)
+      setResponding(true)
       try {
         await agent.respond([{ requestId, optionId }])
       } catch (error) {
         setFailure(error instanceof Error ? error.message : String(error))
+      } finally {
+        setResponding(false)
       }
     },
     [agent, replaying]
@@ -325,9 +389,11 @@ export function ChatRail({ courseId }: { courseId: string }) {
             <div
               key={item.id}
               style={{
-                animation: `fade-up ${dials.revealMs}ms cubic-bezier(0.23,1,0.32,1) ${
-                  index * dials.staggerMs
-                }ms both`,
+                animation: reduceMotion
+                  ? undefined
+                  : `fade-up ${dials.revealMs}ms cubic-bezier(0.23,1,0.32,1) ${
+                      index * dials.staggerMs
+                    }ms both`,
               }}
             >
               {item.kind === "user" && <UserRow text={item.text} failed={item.failed} />}
@@ -349,7 +415,10 @@ export function ChatRail({ courseId }: { courseId: string }) {
                 />
               )}
               {item.kind === "approval" && (
-                <ApprovalRow item={item} busy={busy} onRespond={respond} />
+                /* `responding`, not `busy`: an approval stays open across
+                 * turns (agent/workspace/README.md), so an unrelated stream
+                 * must not lock the person out of answering it. */
+                <ApprovalRow item={item} busy={responding} onRespond={respond} />
               )}
             </div>
           ))

@@ -13,7 +13,19 @@ import { defineHook } from "eve/hooks"
  */
 
 // modelId is only on step.started, so carry it to the matching step.completed.
+// A cancelled or interrupted step never emits step.completed, so the entry
+// would otherwise live for the lifetime of the server process — bounded here,
+// oldest first (Map preserves insertion order).
+const MAX_PENDING_STEPS = 512
 const modelBySession = new Map<string, string>()
+
+function rememberModel(key: string, modelId: string): void {
+  if (modelBySession.size >= MAX_PENDING_STEPS) {
+    const oldest = modelBySession.keys().next().value
+    if (oldest !== undefined) modelBySession.delete(oldest)
+  }
+  modelBySession.set(key, modelId)
+}
 
 function stepKey(sessionId: string, turnId: string, stepIndex: number): string {
   return `${sessionId}:${turnId}:${stepIndex}`
@@ -22,7 +34,7 @@ function stepKey(sessionId: string, turnId: string, stepIndex: number): string {
 export default defineHook({
   events: {
     "step.started"(event, ctx) {
-      modelBySession.set(
+      rememberModel(
         stepKey(ctx.session.id, event.data.turnId, event.data.stepIndex),
         event.data.modelId,
       )

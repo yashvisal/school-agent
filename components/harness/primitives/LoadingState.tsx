@@ -100,7 +100,13 @@ export default function LoadingState({
       {resolvedLabel}
     </span>
   );
-  const elapsedEl = <span className="font-mono text-[12px] text-ink-3 tabular-nums">{elapsed}</span>;
+  /* aria-hidden: the timer ticks 10×/s inside a role="status" region, which
+   * would otherwise be announced on every tick for the whole run. */
+  const elapsedEl = (
+    <span aria-hidden className="font-mono text-[12px] text-ink-3 tabular-nums">
+      {elapsed}
+    </span>
+  );
 
   if (surfer) {
     return (

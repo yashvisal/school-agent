@@ -57,7 +57,7 @@ at it (env is not inherited from the repo root in that case):
 ```bash
 cd agent/workspace
 SPIKE_B_PROBE=1 EVE_SANDBOX_BACKEND=vercel VERCEL_OIDC_TOKEN=<from repo-root .env.local> ../../node_modules/.bin/eve dev --port 4004
-EVE_HOST=http://127.0.0.1:4004 node scripts/spike-b-isolation.mts
+EVE_HOST=http://127.0.0.1:4004 node ../../scripts/spike-b-isolation.mts
 ```
 
 ---
@@ -76,14 +76,14 @@ identifies the principal while the sandbox initializes — exactly the hook
 `hydrateWorkspace(studentId, courseId)` needs. `sandbox.id` is stable per
 session and literally embeds the durable session id:
 
-```
+```text
 eve-sbx-ses-vercel-07271c4eea03b1cb-c6c47d291d1f-wrun_01M1B5JVS52HACBMEF002DZX01-__root__
                                                   ^ durable sessionId
 ```
 
 ### Evidence (Vercel Sandbox backend, `EVE_SANDBOX_BACKEND=vercel`)
 
-```
+```text
 PASS  A1 probe reached a live sandbox
 PASS  A1 marker written and visible in session A
 PASS  A1 onSession hydrated SESSION.md
@@ -169,7 +169,10 @@ so `--mode=agent` has not been executed end to end. That gap is about the
 - `data.messages` are `EveMessage[]` — **not** AI SDK `UIMessage[]`. Parts:
   `text | reasoning | file | step-start | dynamic-tool | authorization`.
 - A tool call is a `dynamic-tool` part and moves through
-  `input-streaming` → `input-available` → (`approval-requested`) → `output-available`.
+  `input-streaming` → `input-available` → (`approval-requested` →
+  `approval-responded`) → `output-available`. The `approval-responded` state is
+  what the rail shows between the answer and the tool's result, and
+  `lib/eve/fixtures.ts` replays it, so a renderer must handle it.
   `input-streaming` carries partial raw JSON in `part.inputText`;
   `input-available` carries the validated `part.input`.
 - **Approvals.** When a gated tool is called, eve emits `input.requested`, the

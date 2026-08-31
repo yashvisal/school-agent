@@ -93,7 +93,9 @@ export function SettingsView() {
                 defaultValue="+1 (555) 018-2244"
                 aria-label="Phone number"
                 // TODO(core): api.students.updatePrefs({ phone })
-                className="h-8 w-48 rounded-control bg-field px-2.5 text-right text-[13px] text-ink shadow-hairline outline-none"
+                /* 16px on mobile: below that, Safari zooms the viewport on
+                 * focus and never zooms back out. */
+                className="h-8 w-48 rounded-control bg-field px-2.5 text-right text-[16px] text-ink shadow-hairline outline-none sm:text-[13px]"
               />
             </div>
             <div className="h-px bg-line" />

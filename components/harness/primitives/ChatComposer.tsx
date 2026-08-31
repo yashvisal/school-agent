@@ -144,14 +144,14 @@ export default function ChatComposer({
         </div>
         <div className="flex items-center gap-1">
           {[
-            <path key="p" d="M12 5v14M5 12h14" />,
-            <g key="h"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></g>,
-            <g key="e" fill="currentColor" stroke="none"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></g>,
-          ].map((icon, i) => (
+            { label: "New chat", icon: <path d="M12 5v14M5 12h14" /> },
+            { label: "History", icon: <g><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></g> },
+            { label: "More options", icon: <g fill="currentColor" stroke="none"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></g> },
+          ].map(({ label, icon }) => (
             <button
-              key={i}
+              key={label}
               type="button"
-              aria-label="Action"
+              aria-label={label}
               className="flex size-6 items-center justify-center rounded-[6px] text-ink-3
                 transition-colors duration-100 hover:bg-hover hover:text-ink-2"
             >

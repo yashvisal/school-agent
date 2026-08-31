@@ -170,9 +170,13 @@ export function ChangeFeed({
   const pending = changes.filter(
     (c) => c.status === "pending" && !resolved[c._id]
   )
-  const applied = changes.filter(
-    (c) => c.status === "applied" || c.status === "approved"
-  )
+  /* An approval must leave a trace, not just vanish: until `api.changes.approve`
+   * flips the row's status in Core, keep the locally-approved change visible at
+   * the top of "applied" so the count moves and the student sees a confirmation. */
+  const applied = [
+    ...changes.filter((c) => resolved[c._id] === "approved"),
+    ...changes.filter((c) => c.status === "applied" || c.status === "approved"),
+  ]
   const visibleApplied = showAll
     ? applied
     : applied.slice(0, Math.round(dials.appliedVisible))
@@ -204,7 +208,9 @@ export function ChangeFeed({
               change={change}
               course={change.courseId ? byId.get(change.courseId) : undefined}
               onResolve={(id, action) =>
-                // TODO(core): api.changes.approve / api.changes.propose (origin "manual")
+                // TODO(core): api.changes.approve / api.changes.propose (origin
+                // "manual") is the durable write; this local record only keeps
+                // the row's fate on screen until that lands.
                 setResolved((r) => ({ ...r, [id]: action }))
               }
             />

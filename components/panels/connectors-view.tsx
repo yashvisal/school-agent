@@ -76,8 +76,13 @@ function SourceCard({ source }: { source: Source }) {
           size="xs"
           variant="secondary"
           disabled={resyncing}
-          // TODO(core): api.sources.resync({ sourceId })
-          onClick={() => setResyncing(true)}
+          onClick={() => {
+            // TODO(core): api.sources.resync({ sourceId }) — until that exists
+            // there is no completion event, so release the control ourselves
+            // rather than leaving it stuck on "Re-syncing…" for the session.
+            setResyncing(true)
+            window.setTimeout(() => setResyncing(false), 1200)
+          }}
         >
           {resyncing ? "Re-syncing…" : "Re-sync"}
         </Button>
@@ -88,7 +93,11 @@ function SourceCard({ source }: { source: Source }) {
 
 export function ConnectorsView() {
   const sources = useSources()
-  const unhealthy = sources?.filter((s) => s.health !== "healthy").length ?? 0
+  /* `never_synced` is a one-time upload, not a problem — counting it would
+   * contradict the neutral "One-time upload" pill on the card itself. */
+  const unhealthy =
+    sources?.filter((s) => s.health === "degraded" || s.health === "failing")
+      .length ?? 0
 
   return (
     <>

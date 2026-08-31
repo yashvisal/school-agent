@@ -63,6 +63,22 @@ function syllabus(ref: string, confidence: number, hours = 96): Provenance {
   }
 }
 
+/** Signals are facts too: what was said or seen, where, and how sure. */
+function signal(
+  source: Provenance["source"],
+  ref: string,
+  hours: number,
+  confidence = 1,
+): Provenance {
+  return {
+    source,
+    sourceRef: ref,
+    confidence,
+    snapshotId: "snap_signals_live",
+    observedAt: hoursAgo(hours),
+  }
+}
+
 /* ── courses ────────────────────────────────────────────────────────────── */
 
 export const courses: Course[] = [
@@ -167,17 +183,11 @@ export const deadlines: Deadline[] = [
     submissionStatus: "unsubmitted",
     provenance: canvas("assignments/908277", "snap_canvas_0912", 2),
   },
-  {
-    _id: "dl_chem_midterm2",
-    courseId: "course_orgchem",
-    title: "Midterm 2",
-    kind: "exam",
-    dueAt: at(16, 19, 0),
-    pointsPossible: 200,
-    category: "Midterms",
-    provenance: syllabus("CHEM-202-syllabus.pdf p.4", 0.91),
-    pendingChangeId: "chg_chem_midterm_room",
-  },
+  /* CHEM 202 Midterm 2 is deliberately absent: it exists only as the pending
+   * `chg_chem_midterm_room` addition. Under the two-tier rule (core.md) an
+   * LLM-interpreted `deadline_added` is held until approval, so materializing
+   * it here would show an unapproved deadline as current course state.
+   * `pendingChangeId` is for deadlines that already exist and may move. */
   {
     _id: "dl_chem_reading12",
     courseId: "course_orgchem",
@@ -553,7 +563,7 @@ export const changes: Change[] = [
     _id: "chg_chem_midterm_room",
     studentId: STUDENT,
     courseId: "course_orgchem",
-    deadlineId: "dl_chem_midterm2",
+    /* no `deadlineId`: approving this change is what creates the deadline */
     kind: "deadline_added",
     summary: "CHEM 202 Midterm 2 read off the syllabus — evening slot, not on Canvas",
     fields: [
@@ -616,14 +626,16 @@ export const changes: Change[] = [
     at: hoursAgo(9),
   },
   {
-    _id: "chg_econ_ps4_submitted",
+    _id: "chg_econ_ps4_graded",
     studentId: STUDENT,
     courseId: "course_micro",
     deadlineId: "dl_econ_ps4",
-    kind: "submitted",
-    summary: "Problem Set 4 submission landed",
+    /* the transition is to `graded`, so the kind is `grade_posted` — a feed
+     * filter that trusts `kind` must not read a grade event as a submission */
+    kind: "grade_posted",
+    summary: "Problem Set 4 grade posted",
     fields: [
-      { field: "submissionStatus", before: "unsubmitted", after: "graded" },
+      { field: "submissionStatus", before: "submitted", after: "graded" },
     ],
     origin: "canvas",
     tier: "auto",
@@ -702,7 +714,7 @@ export const sources: Source[] = [
     studentId: STUDENT,
     kind: "site",
     label: "ECON 205 course site",
-    detail: "cs231.example.edu · crawled nightly",
+    detail: "econ205.example.edu · crawled nightly",
     lastPolledAt: hoursAgo(6),
     health: "failing",
     covers: ["ECON 205"],
@@ -733,6 +745,7 @@ export const studentSignals: StudentSignal[] = [
     taskId: "task_cs_pa3_done",
     origin: "observed",
     observedAt: hoursAgo(70),
+    provenance: signal("canvas", "task_cs_pa3_done/completion", 70),
   },
   {
     _id: "sig_difficulty_chem",
@@ -742,6 +755,7 @@ export const studentSignals: StudentSignal[] = [
     courseId: "course_orgchem",
     origin: "workspace",
     observedAt: hoursAgo(26),
+    provenance: signal("chat", "workspace/course_orgchem", 26, 0.8),
   },
   {
     _id: "sig_availability",
@@ -750,5 +764,6 @@ export const studentSignals: StudentSignal[] = [
     text: "not free Thursday evenings this month",
     origin: "chat",
     observedAt: hoursAgo(48),
+    provenance: signal("chat", "thread/2026-08-29", 48),
   },
 ]
