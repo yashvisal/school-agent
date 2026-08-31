@@ -2,7 +2,7 @@ import { paginationOptsValidator } from "convex/server"
 import { v } from "convex/values"
 
 import { internalMutation, mutation, query } from "./_generated/server"
-import { requireStudent } from "./lib/auth"
+import { getCurrentStudent, requireStudent } from "./lib/auth"
 import {
   approveChangeInternal,
   expireStaleInternal,
@@ -64,6 +64,42 @@ export const approve = mutation({
     if (!change) throw new Error("404: change not found")
     await requireStudent(ctx, change.studentId)
     return await approveChangeInternal(ctx, args.changeId, args.via)
+  },
+})
+
+/**
+ * Bulk approval — the onboarding path (core.md rule 2: the web queue holds bulk
+ * syllabus/site parses, approved in one gesture). Same semantics as `approve`,
+ * per row; already-resolved rows are counted as skipped, not errors, so a
+ * double-tap is harmless.
+ */
+export const approveMany = mutation({
+  args: {
+    changeIds: v.array(v.id("changes")),
+    via: v.union(v.literal("web"), v.literal("chat")),
+  },
+  returns: v.object({ approved: v.number(), skipped: v.number() }),
+  handler: async (ctx, args) => {
+    if (args.changeIds.length > 200) {
+      throw new Error("400: at most 200 changes per call")
+    }
+    const student = await getCurrentStudent(ctx)
+    if (!student) throw new Error("401: not signed in")
+    let approved = 0
+    let skipped = 0
+    for (const changeId of args.changeIds) {
+      const change = await ctx.db.get("changes", changeId)
+      // A stale, foreign, or already-resolved id is SKIPPED, not thrown: the
+      // mutation is transactional, and one bad id must not roll back the other
+      // 199 approvals (CR 3898632494). Foreign rows leak nothing but a count.
+      if (!change || change.studentId !== student._id || change.status !== "pending") {
+        skipped++
+        continue
+      }
+      await approveChangeInternal(ctx, changeId, args.via)
+      approved++
+    }
+    return { approved, skipped }
   },
 })
 
