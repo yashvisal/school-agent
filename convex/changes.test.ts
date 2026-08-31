@@ -1,0 +1,390 @@
+import { describe, expect, test } from "vitest"
+
+import { api, internal } from "./_generated/api"
+import type { Id } from "./_generated/dataModel"
+import { CLERK_ID, setupTest } from "./test.setup"
+
+/**
+ * The two-tier apply rule and approval semantics (plans/core.md).
+ * These are the invariants every adapter and agent tool depends on.
+ */
+
+type Seeded = { studentId: Id<"students">; courseId: Id<"courses"> }
+
+async function seed(t: ReturnType<typeof setupTest>): Promise<Seeded> {
+  return await t.run(async (ctx) => {
+    const studentId = await ctx.db.insert("students", {
+      clerkId: CLERK_ID,
+      timezone: "America/New_York",
+      classBlocks: [],
+      availability: { weekly: [], exceptions: [] },
+      status: "active",
+    })
+    const courseId = await ctx.db.insert("courses", {
+      studentId,
+      name: "Compsci 201",
+      code: "CS201",
+      sourceRefs: { canvasCourseId: "1001" },
+      status: "active",
+      provenance: { source: "canvas", sourceRef: "courses/1001", confidence: 1 },
+    })
+    return { studentId, courseId }
+  })
+}
+
+const deadlineAfter = (courseId: Id<"courses">, overrides: Record<string, unknown> = {}) => ({
+  courseId,
+  title: "Pset 3",
+  kind: "homework",
+  dueAt: Date.UTC(2026, 8, 15, 3, 59),
+  pointsPossible: 100,
+  submissionStatus: "unsubmitted",
+  externalIds: { canvasAssignmentId: "5001" },
+  provenance: {
+    source: "canvas",
+    sourceRef: "assignments/5001",
+    confidence: 1,
+  },
+  status: "active",
+  ...overrides,
+})
+
+const countDeadlines = (t: ReturnType<typeof setupTest>) =>
+  t.run(async (ctx) => (await ctx.db.query("deadlines").take(100)).length)
+
+describe("two-tier apply rule", () => {
+  test("canvas deadline_added is auto-tier and applies immediately", async () => {
+    const t = setupTest()
+    const { studentId, courseId } = await seed(t)
+
+    const result = await t.mutation(internal.changes.propose, {
+      studentId,
+      courseId,
+      kind: "deadline_added",
+      entity: { table: "deadlines" },
+      after: deadlineAfter(courseId),
+      origin: "canvas",
+    })
+
+    expect(result.status).toBe("applied")
+
+    const { change, deadlines } = await t.run(async (ctx) => ({
+      change: await ctx.db.get("changes", result.changeId),
+      deadlines: await ctx.db.query("deadlines").take(10),
+    }))
+
+    expect(change?.tier).toBe("auto")
+    expect(change?.resolvedVia).toBe("auto")
+    expect(deadlines).toHaveLength(1)
+    expect(deadlines[0].title).toBe("Pset 3")
+    expect(deadlines[0].externalIds.canvasAssignmentId).toBe("5001")
+    // The created row is linked back onto the change.
+    expect(change?.entity.id).toBe(deadlines[0]._id)
+  })
+
+  test("ical origin is also auto-tier", async () => {
+    const t = setupTest()
+    const { studentId, courseId } = await seed(t)
+
+    const result = await t.mutation(internal.changes.propose, {
+      studentId,
+      courseId,
+      kind: "deadline_added",
+      entity: { table: "deadlines" },
+      after: deadlineAfter(courseId, {
+        externalIds: { icalUid: "event-assignment-5001" },
+        provenance: { source: "ical", sourceRef: "feed.ics", confidence: 1 },
+      }),
+      origin: "ical",
+    })
+
+    expect(result.status).toBe("applied")
+    expect(await countDeadlines(t)).toBe(1)
+  })
+
+  test("a conflict from canvas downgrades to needs_approval", async () => {
+    const t = setupTest()
+    const { studentId, courseId } = await seed(t)
+
+    const result = await t.mutation(internal.changes.propose, {
+      studentId,
+      courseId,
+      kind: "deadline_added",
+      entity: { table: "deadlines" },
+      after: deadlineAfter(courseId),
+      origin: "canvas",
+      conflict: true,
+      reason: "canvas and syllabus disagree on the due date",
+    })
+
+    expect(result.status).toBe("pending")
+    const change = await t.run((ctx) => ctx.db.get("changes", result.changeId))
+    expect(change?.tier).toBe("needs_approval")
+    expect(await countDeadlines(t)).toBe(0)
+  })
+})
+
+describe("needs_approval lifecycle", () => {
+  test("an LLM-interpreted change holds pending and touches nothing", async () => {
+    const t = setupTest()
+    const { studentId, courseId } = await seed(t)
+
+    const result = await t.mutation(internal.changes.propose, {
+      studentId,
+      courseId,
+      kind: "deadline_added",
+      entity: { table: "deadlines" },
+      after: deadlineAfter(courseId, {
+        title: "Midterm",
+        kind: "exam",
+        externalIds: {},
+        provenance: { source: "syllabus", sourceRef: "p.2", confidence: 0.8 },
+      }),
+      origin: "syllabus",
+    })
+
+    expect(result.status).toBe("pending")
+    expect(await countDeadlines(t)).toBe(0)
+
+    const pending = await t
+      .withIdentity({ subject: CLERK_ID })
+      .query(api.changes.listPending, { studentId })
+    expect(pending).toHaveLength(1)
+    expect(pending[0].tier).toBe("needs_approval")
+    expect(pending[0].resolvedVia).toBeUndefined()
+  })
+
+  test("approve applies the held change", async () => {
+    const t = setupTest()
+    const { studentId, courseId } = await seed(t)
+    const as = t.withIdentity({ subject: CLERK_ID })
+
+    const { changeId } = await t.mutation(internal.changes.propose, {
+      studentId,
+      courseId,
+      kind: "deadline_added",
+      entity: { table: "deadlines" },
+      after: deadlineAfter(courseId, { title: "Midterm", kind: "exam" }),
+      origin: "syllabus",
+    })
+
+    expect(await countDeadlines(t)).toBe(0)
+
+    const approved = await as.mutation(api.changes.approve, { changeId, via: "web" })
+    expect(approved.status).toBe("approved")
+
+    const { change, deadlines } = await t.run(async (ctx) => ({
+      change: await ctx.db.get("changes", changeId),
+      deadlines: await ctx.db.query("deadlines").take(10),
+    }))
+    expect(change?.resolvedVia).toBe("web")
+    expect(deadlines).toHaveLength(1)
+    expect(deadlines[0].title).toBe("Midterm")
+
+    // The queue is drained.
+    expect(await as.query(api.changes.listPending, { studentId })).toHaveLength(0)
+  })
+
+  test("reject resolves without applying", async () => {
+    const t = setupTest()
+    const { studentId, courseId } = await seed(t)
+    const as = t.withIdentity({ subject: CLERK_ID })
+
+    const { changeId } = await t.mutation(internal.changes.propose, {
+      studentId,
+      courseId,
+      kind: "deadline_added",
+      entity: { table: "deadlines" },
+      after: deadlineAfter(courseId, { title: "Ghost exam" }),
+      origin: "site",
+    })
+
+    const rejected = await as.mutation(api.changes.reject, { changeId })
+    expect(rejected.status).toBe("rejected")
+    expect(await countDeadlines(t)).toBe(0)
+
+    const change = await t.run((ctx) => ctx.db.get("changes", changeId))
+    expect(change?.status).toBe("rejected")
+    expect(change?.resolvedAt).toBeTypeOf("number")
+  })
+
+  test("inline chat confirmation approves and applies in one step", async () => {
+    const t = setupTest()
+    const { studentId, courseId } = await seed(t)
+
+    // "midterm now Friday, right?" -> "yeah"
+    const result = await t.mutation(internal.changes.propose, {
+      studentId,
+      courseId,
+      kind: "deadline_added",
+      entity: { table: "deadlines" },
+      after: deadlineAfter(courseId, { title: "Midterm", kind: "exam" }),
+      origin: "chat",
+      confirmedInline: true,
+    })
+
+    expect(result.status).toBe("approved")
+
+    const change = await t.run((ctx) => ctx.db.get("changes", result.changeId))
+    expect(change?.tier).toBe("needs_approval")
+    expect(change?.resolvedVia).toBe("chat")
+    expect(await countDeadlines(t)).toBe(1)
+
+    // It does NOT also wait in the web queue.
+    const pending = await t
+      .withIdentity({ subject: CLERK_ID })
+      .query(api.changes.listPending, { studentId })
+    expect(pending).toHaveLength(0)
+  })
+})
+
+describe("applying updates to existing entities", () => {
+  test("deadline_moved patches the due date, deadline_removed soft-deletes", async () => {
+    const t = setupTest()
+    const { studentId, courseId } = await seed(t)
+
+    const added = await t.mutation(internal.changes.propose, {
+      studentId,
+      courseId,
+      kind: "deadline_added",
+      entity: { table: "deadlines" },
+      after: deadlineAfter(courseId),
+      origin: "canvas",
+    })
+    const deadlineId = (await t.run((ctx) => ctx.db.get("changes", added.changeId)))!
+      .entity.id!
+
+    const movedTo = Date.UTC(2026, 8, 18, 3, 59)
+    await t.mutation(internal.changes.propose, {
+      studentId,
+      courseId,
+      kind: "deadline_moved",
+      entity: { table: "deadlines", id: deadlineId },
+      before: { dueAt: deadlineAfter(courseId).dueAt },
+      after: { dueAt: movedTo },
+      origin: "canvas",
+    })
+
+    let deadline = await t.run((ctx) =>
+      ctx.db.get("deadlines", deadlineId as Id<"deadlines">)
+    )
+    expect(deadline?.dueAt).toBe(movedTo)
+    expect(deadline?.title).toBe("Pset 3")
+
+    await t.mutation(internal.changes.propose, {
+      studentId,
+      courseId,
+      kind: "deadline_removed",
+      entity: { table: "deadlines", id: deadlineId },
+      origin: "canvas",
+    })
+
+    deadline = await t.run((ctx) =>
+      ctx.db.get("deadlines", deadlineId as Id<"deadlines">)
+    )
+    expect(deadline?.status).toBe("removed")
+  })
+
+  test("re-proposing the same canvas assignment does not duplicate the deadline", async () => {
+    const t = setupTest()
+    const { studentId, courseId } = await seed(t)
+
+    for (let i = 0; i < 2; i++) {
+      await t.mutation(internal.changes.propose, {
+        studentId,
+        courseId,
+        kind: "deadline_added",
+        entity: { table: "deadlines" },
+        after: deadlineAfter(courseId),
+        origin: "canvas",
+      })
+    }
+
+    expect(await countDeadlines(t)).toBe(1)
+  })
+})
+
+describe("expireStale", () => {
+  test("expires stale pending changes and never applies them", async () => {
+    const t = setupTest()
+    const { studentId, courseId } = await seed(t)
+
+    const stale = await t.mutation(internal.changes.propose, {
+      studentId,
+      courseId,
+      kind: "deadline_added",
+      entity: { table: "deadlines" },
+      after: deadlineAfter(courseId, { title: "Stale syllabus guess" }),
+      origin: "syllabus",
+    })
+    const fresh = await t.mutation(internal.changes.propose, {
+      studentId,
+      courseId,
+      kind: "deadline_added",
+      entity: { table: "deadlines" },
+      after: deadlineAfter(courseId, { title: "Fresh syllabus guess" }),
+      origin: "syllabus",
+    })
+
+    // Backdate the first one past the horizon.
+    const horizonMs = 7 * 24 * 60 * 60 * 1000
+    await t.run(async (ctx) => {
+      await ctx.db.patch("changes", stale.changeId, {
+        createdAt: Date.now() - horizonMs - 1000,
+      })
+    })
+
+    const expired = await t.mutation(internal.changes.expireStale, {
+      studentId,
+      olderThanMs: horizonMs,
+    })
+    expect(expired).toBe(1)
+
+    const { staleDoc, freshDoc } = await t.run(async (ctx) => ({
+      staleDoc: await ctx.db.get("changes", stale.changeId),
+      freshDoc: await ctx.db.get("changes", fresh.changeId),
+    }))
+    expect(staleDoc?.status).toBe("expired")
+    expect(staleDoc?.resolvedVia).toBe("expired")
+    expect(freshDoc?.status).toBe("pending")
+
+    // Expiry is a drop, not an apply.
+    expect(await countDeadlines(t)).toBe(0)
+
+    // An expired change can no longer be approved into existence.
+    const reApprove = await t
+      .withIdentity({ subject: CLERK_ID })
+      .mutation(api.changes.approve, { changeId: stale.changeId, via: "web" })
+    expect(reApprove.status).toBe("expired")
+    expect(await countDeadlines(t)).toBe(0)
+  })
+})
+
+describe("authorization", () => {
+  test("another identity cannot read or approve this student's changes", async () => {
+    const t = setupTest()
+    const { studentId, courseId } = await seed(t)
+
+    const { changeId } = await t.mutation(internal.changes.propose, {
+      studentId,
+      courseId,
+      kind: "deadline_added",
+      entity: { table: "deadlines" },
+      after: deadlineAfter(courseId),
+      origin: "syllabus",
+    })
+
+    const stranger = t.withIdentity({ subject: "user_test_stranger" })
+    await expect(
+      stranger.query(api.changes.listPending, { studentId })
+    ).rejects.toThrow(/403/)
+    await expect(
+      stranger.mutation(api.changes.approve, { changeId, via: "web" })
+    ).rejects.toThrow(/403/)
+
+    // Signed out is a 401, not a silent read.
+    await expect(t.query(api.changes.listPending, { studentId })).rejects.toThrow(
+      /401/
+    )
+  })
+})

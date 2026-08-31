@@ -9,6 +9,11 @@
  */
 
 import type * as auth from "../auth.js";
+import type * as changes from "../changes.js";
+import type * as lib_auth from "../lib/auth.js";
+import type * as lib_changes from "../lib/changes.js";
+import type * as lib_validators from "../lib/validators.js";
+import type * as students from "../students.js";
 
 import type {
   ApiFromModules,
@@ -18,6 +23,11 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
+  changes: typeof changes;
+  "lib/auth": typeof lib_auth;
+  "lib/changes": typeof lib_changes;
+  "lib/validators": typeof lib_validators;
+  students: typeof students;
 }>;
 
 /**
