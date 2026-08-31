@@ -1,0 +1,80 @@
+{
+  "_comment": "SYNTHETIC fixture for Spike A only. Not real student data. Core replaces this with Convex queries; the shapes here are the tool contract, not the storage model. Deadlines are expressed as dueInDays offsets so the fixture never goes stale.",
+  "student": {
+    "studentId": "stu_demo",
+    "firstName": "Sam",
+    "timezone": "America/New_York"
+  },
+  "weekdayTemplate": {
+    "1": [{ "title": "CHEM 101 lecture", "start": "10:05", "end": "11:20" }, { "title": "CS 201 lecture", "start": "13:25", "end": "14:40" }],
+    "2": [{ "title": "ECON 210 lecture", "start": "11:45", "end": "13:00" }, { "title": "CHEM 101 lab", "start": "14:00", "end": "17:00" }],
+    "3": [{ "title": "CHEM 101 lecture", "start": "10:05", "end": "11:20" }, { "title": "CS 201 lecture", "start": "13:25", "end": "14:40" }],
+    "4": [{ "title": "ECON 210 lecture", "start": "11:45", "end": "13:00" }, { "title": "CS 201 recitation", "start": "15:00", "end": "16:15" }],
+    "5": [{ "title": "CHEM 101 lecture", "start": "10:05", "end": "11:20" }],
+    "6": [],
+    "0": []
+  },
+  "dayBounds": { "start": "08:00", "end": "23:00" },
+  "courses": [
+    {
+      "courseId": "crs_chem101",
+      "code": "CHEM 101",
+      "title": "General Chemistry I",
+      "gradingScheme": [
+        { "category": "Midterms", "weight": 0.4 },
+        { "category": "Labs", "weight": 0.2 },
+        { "category": "Problem sets", "weight": 0.15 },
+        { "category": "Final", "weight": 0.25 }
+      ]
+    },
+    {
+      "courseId": "crs_cs201",
+      "code": "CS 201",
+      "title": "Data Structures",
+      "gradingScheme": [
+        { "category": "Psets", "weight": 0.45 },
+        { "category": "Midterm", "weight": 0.2 },
+        { "category": "Final project", "weight": 0.35 }
+      ]
+    },
+    {
+      "courseId": "crs_econ210",
+      "code": "ECON 210",
+      "title": "Intermediate Microeconomics",
+      "gradingScheme": [
+        { "category": "Problem sets", "weight": 0.3 },
+        { "category": "Midterm", "weight": 0.3 },
+        { "category": "Final", "weight": 0.4 }
+      ]
+    }
+  ],
+  "deadlines": [
+    { "deadlineId": "dl_chem_ps5", "courseId": "crs_chem101", "title": "Chem PS5", "kind": "problem_set", "category": "Problem sets", "pointsPossible": 30, "dueInDays": 1, "dueTime": "23:59" },
+    { "deadlineId": "dl_cs_pset4", "courseId": "crs_cs201", "title": "CS 201 pset 4 (AVL trees)", "kind": "problem_set", "category": "Psets", "pointsPossible": 100, "dueInDays": 2, "dueTime": "23:59" },
+    { "deadlineId": "dl_econ_ps3", "courseId": "crs_econ210", "title": "ECON PS3", "kind": "problem_set", "category": "Problem sets", "pointsPossible": 40, "dueInDays": 4, "dueTime": "17:00" },
+    { "deadlineId": "dl_chem_midterm", "courseId": "crs_chem101", "title": "Chem midterm 1", "kind": "exam", "category": "Midterms", "pointsPossible": 200, "dueInDays": 6, "dueTime": "10:05" },
+    { "deadlineId": "dl_cs_project_proposal", "courseId": "crs_cs201", "title": "CS 201 final project proposal", "kind": "project", "category": "Final project", "pointsPossible": 25, "dueInDays": 9, "dueTime": "23:59" },
+    { "deadlineId": "dl_econ_midterm", "courseId": "crs_econ210", "title": "ECON midterm", "kind": "exam", "category": "Midterm", "pointsPossible": 150, "dueInDays": 12, "dueTime": "11:45" }
+  ],
+  "tasks": [
+    { "taskId": "tsk_chem_ps5", "deadlineId": "dl_chem_ps5", "title": "Finish Chem PS5 (problems 4-9)", "effortEstimateMin": 90, "status": "planned" },
+    { "taskId": "tsk_cs_pset4", "deadlineId": "dl_cs_pset4", "title": "CS 201 pset 4 — rotations + tests", "effortEstimateMin": 240, "status": "planned" },
+    { "taskId": "tsk_econ_ps3", "deadlineId": "dl_econ_ps3", "title": "ECON PS3 — parts A and B", "effortEstimateMin": 75, "status": "planned" },
+    { "taskId": "tsk_chem_midterm_review", "deadlineId": "dl_chem_midterm", "title": "Chem midterm review — stoichiometry set", "effortEstimateMin": 120, "status": "planned" },
+    { "taskId": "tsk_cs_proposal", "deadlineId": "dl_cs_project_proposal", "title": "Draft CS 201 project proposal", "effortEstimateMin": 60, "status": "planned" },
+    { "taskId": "tsk_econ_midterm_review", "deadlineId": "dl_econ_midterm", "title": "ECON midterm — redo PS1 and PS2", "effortEstimateMin": 150, "status": "planned" }
+  ],
+  "pendingChanges": [
+    {
+      "changeId": "chg_chem_midterm_move",
+      "refs": { "courseId": "crs_chem101", "deadlineId": "dl_chem_midterm" },
+      "summary": "The syllabus says the chem midterm may move to Friday; Canvas still shows the original date.",
+      "question": "Did the chem midterm move to Friday?"
+    }
+  ],
+  "studentSignals": [
+    { "signalId": "sig_1", "kind": "pacing", "text": "Said CS psets take 2h; the last two took about 4h." },
+    { "signalId": "sig_2", "kind": "availability", "text": "Never works Friday nights." },
+    { "signalId": "sig_3", "kind": "difficulty", "text": "Stressed about chem — mentioned it twice this week." }
+  ]
+}
