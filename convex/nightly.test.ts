@@ -43,7 +43,7 @@ beforeEach(() => {
   )
   vi.stubGlobal("fetch", fetchMock)
   vi.stubEnv("EVE_VOICE_URL", VOICE_URL)
-  vi.stubEnv("EVE_VOICE_TOKEN", "eve-token")
+  vi.stubEnv("VOICE_TRIGGER_SECRET", "trigger-secret")
 })
 
 afterEach(() => {
@@ -53,6 +53,9 @@ afterEach(() => {
 
 type Seeded = { studentId: Id<"students">; courseId: Id<"courses"> }
 
+/** The trigger's own gates default to open: a phone on file, contact warmed. */
+const PHONE = "+15551230000"
+
 async function seed(
   t: ReturnType<typeof setupTest>,
   overrides: Record<string, unknown> = {}
@@ -61,6 +64,8 @@ async function seed(
     const studentId = await ctx.db.insert("students", {
       clerkId: CLERK_ID,
       timezone: TZ,
+      phone: PHONE,
+      inboundCount: 3,
       classBlocks: [],
       availability: {
         weekly: [1, 2, 3, 4, 5].map((dayOfWeek) => ({
@@ -275,7 +280,7 @@ describe("runForStudent", () => {
     expect(feasible.options.map((o) => o.title)).toEqual(["Pset 3"])
   })
 
-  test("POSTs the documented eve session contract", async () => {
+  test("POSTs the reconciled Voice trigger contract (VOICE_TOOLS.md §8)", async () => {
     const t = setupTest()
     const seeded = await seed(t)
 
@@ -287,24 +292,62 @@ describe("runForStudent", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(url).toBe(`${VOICE_URL}/eve/v1/session`)
+    expect(url).toBe(`${VOICE_URL}/eve/agents/voice/eve/v1/trigger`)
     expect(init.method).toBe("POST")
 
     const headers = init.headers as Record<string, string>
-    expect(headers.authorization).toBe("Bearer eve-token")
+    expect(headers["x-voice-trigger-secret"]).toBe("trigger-secret")
+    expect(headers.authorization).toBeUndefined()
     expect(headers["content-type"]).toBe("application/json")
 
     const body = JSON.parse(init.body as string) as {
-      message: string
+      phone: string
       operationId: string
+      kind: string
+      date: string
+      planRunId: string
     }
     expect(body.operationId).toBe(operationIdFor(seeded.studentId, TOMORROW))
-    expect(body.message).toContain("nightly_plan")
-    expect(body.message).toContain(`studentId=${seeded.studentId}`)
-    expect(body.message).toContain(`date=${TOMORROW}`)
+    expect(body.phone).toBe(PHONE)
+    expect(body.kind).toBe("morning")
+    expect(body.date).toBe(TOMORROW)
 
     const runs = await runsFor(t)
-    expect(body.message).toContain(`planRunId=${runs[0]._id}`)
+    expect(body.planRunId).toBe(runs[0]._id)
+  })
+
+  test("a student with no phone is skipped — the trigger has nowhere to send", async () => {
+    const t = setupTest()
+    const seeded = await seed(t, { phone: undefined })
+    await addDeadline(t, seeded)
+
+    const result = await t.action(internal.nightly.runForStudent, {
+      studentId: seeded.studentId,
+      date: TOMORROW,
+      now: NIGHTLY_NOW,
+    })
+
+    expect(result.triggerStatus).toBe("skipped")
+    expect(result.error).toBe("no phone on file")
+    expect(fetchMock).not.toHaveBeenCalled()
+    // The plan is still computed and stored — missing a phone is not a failed plan.
+    const runs = await runsFor(t)
+    expect((runs[0].feasible as { options: unknown[] }).options).toHaveLength(1)
+  })
+
+  test("an unwarmed contact is skipped — Photon throttles pushes below 3 inbound", async () => {
+    const t = setupTest()
+    const seeded = await seed(t, { inboundCount: 1 })
+
+    const result = await t.action(internal.nightly.runForStudent, {
+      studentId: seeded.studentId,
+      date: TOMORROW,
+      now: NIGHTLY_NOW,
+    })
+
+    expect(result.triggerStatus).toBe("skipped")
+    expect(result.error).toBe("contact not warmed (1/3 inbound)")
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   test("a repeated pass for the same day does not POST again", async () => {
@@ -401,8 +444,8 @@ describe("runForStudent", () => {
     expect(result.voiceSessionId).toBeUndefined()
   })
 
-  test("no EVE_VOICE_TOKEN is skipped — a trigger is never sent unauthenticated", async () => {
-    vi.stubEnv("EVE_VOICE_TOKEN", "")
+  test("no VOICE_TRIGGER_SECRET is skipped — a trigger is never sent unauthenticated", async () => {
+    vi.stubEnv("VOICE_TRIGGER_SECRET", "")
     const t = setupTest()
     const seeded = await seed(t)
 
@@ -413,7 +456,7 @@ describe("runForStudent", () => {
     })
 
     expect(result.triggerStatus).toBe("skipped")
-    expect(result.error).toBe("EVE_VOICE_TOKEN not set")
+    expect(result.error).toBe("VOICE_TRIGGER_SECRET not set")
     expect(fetchMock).not.toHaveBeenCalled()
     expect((await runsFor(t))[0].triggerStatus).toBe("skipped")
   })

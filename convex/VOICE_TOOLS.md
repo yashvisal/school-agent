@@ -516,42 +516,52 @@ Every hour, Core's cron (`crons.ts` → `internal.nightly.tick`) finds each acti
 student whose **local** clock just struck their nightly hour (`nightlyHourLocal`,
 default `4`) and who has no plan run for tomorrow yet — plus, for the six hours
 after that, any student whose run for tomorrow `failed` or is stuck. For each, it
-expires stale
-pending changes, computes tomorrow's plan, stores it as a `planRuns` row, and then
-starts a Voice session:
+expires stale pending changes, computes tomorrow's plan, stores it as a
+`planRuns` row, and then POSTs the **Voice trigger route** — the custom channel
+route `agent/voice/channels/trigger.ts` mounts under `withEve` on the Next
+deployment. (This is the reconciled path: eve's generic `POST /eve/v1/session`
+is *not* used, because a session created there answers on the HTTP channel —
+only the trigger route hands the run to the Photon channel so the composed text
+reaches the student's phone. Spike A kill criterion 1, proven live.)
 
 ```http
-POST {EVE_VOICE_URL}/eve/v1/session
-Authorization: Bearer {EVE_VOICE_TOKEN}
+POST {EVE_VOICE_URL}/eve/agents/voice/eve/v1/trigger
+x-voice-trigger-secret: {VOICE_TRIGGER_SECRET}
 Content-Type: application/json
 
 {
-  "message": "nightly_plan studentId=j57a... date=2026-09-15 planRunId=k82b...",
-  "operationId": "nightly:j57a...:2026-09-15"
+  "phone": "+15551234567",
+  "operationId": "nightly:j57a...:2026-09-15",
+  "kind": "morning",
+  "date": "2026-09-15",
+  "planRunId": "k82b..."
 }
 ```
 
-### The message
+The trigger route resolves the Photon thread from `phone`, starts a session with
+a machine-readable `MORNING PUSH for <date>` prompt, and answers `202` with
+`{ "sessionId": ... }`, which Core stores on the run. **Composition is entirely
+Voice's**: the agent's `getFeasibleActions` call for that `date` returns the
+stored snapshot (`cached: true`, matching `planRunId`), so the morning text and
+every follow-up describe one consistent day. `planRunId` in the body is
+traceability only — the plan cache, not the prompt, carries the facts.
 
-Deliberately a machine-readable trigger line, not prose. Core computes what is
-possible; **composition is entirely yours.** Parse the three key=value pairs:
+### Gates before the POST
 
-- `studentId` — for every subsequent tool call.
-- `date` — the day being planned (tomorrow, in the student's timezone).
-- `planRunId` — the stored snapshot. Call `getFeasibleActions` with the same
-  `studentId` and `date` and you will get that exact snapshot back
-  (`cached: true`, matching `planRunId`).
+Both are recorded as `skipped` (there is nothing to retry until the student acts):
+
+- **No phone on file** — the trigger addresses the thread by number.
+- **Contact not warmed** — `students.inboundCount < 3` (§7b). Photon throttles
+  proactive sends to unwarmed contacts, so onboarding must end with the student
+  texting first (vision §7) and a short back-and-forth.
 
 ### `operationId` and create-once
 
-`operationId` is `nightly:<studentId>:<date>` — stable per student-day. eve's
-session route treats the same `operationId` under the same principal as
-create-once: a retry returns the session it already made rather than dispatching
-again. Core enforces the same invariant on its side (a run already `triggered` is
-never re-POSTed), so **a student cannot receive two morning texts for one day**
-even if the cron double-fires or the network drops a response.
-
-Core reads `sessionId` from the 2xx response body and stores it on the run.
+`operationId` is `nightly:<studentId>:<date>` — stable per student-day. The
+durable invariant is Core's: a run already `triggered` is never re-POSTed
+(`planRuns.operationId`). The trigger route additionally keeps a per-process
+seen-set, so **a student cannot receive two morning texts for one day** even if
+the cron double-fires or the network drops a response.
 
 ### `triggerStatus`
 
@@ -581,9 +591,19 @@ deployment — dev and prod do not share values:
 
 | Var | Purpose |
 |---|---|
-| `CORE_AGENT_SECRET` | The bearer token every route above requires. Voice needs the same value in its own environment. |
-| `EVE_VOICE_URL` | Base URL of the deployed Voice agent, e.g. `https://voice.example.com`. Unset → nightly runs are `skipped`. |
-| `EVE_VOICE_TOKEN` | Bearer token for eve's session route. Required for `operationId` create-once — eve rejects `operationId` from anonymous callers. Unset while `EVE_VOICE_URL` is set → the run is `skipped` with that reason; Core never POSTs a trigger unauthenticated. |
+| `CORE_AGENT_SECRET` | The bearer token every route above requires. |
+| `EVE_VOICE_URL` | Base URL of the deployment hosting the Voice agent (the Next app, since `withEve` mounts the agent there), e.g. `https://app.example.com` — or a tunnel/localhost in dev. Unset → nightly runs are `skipped`. |
+| `VOICE_TRIGGER_SECRET` | The `x-voice-trigger-secret` value for the trigger route (§8). Unset while `EVE_VOICE_URL` is set → the run is `skipped` with that reason; Core never POSTs a trigger unauthenticated. (Replaces the retired `EVE_VOICE_TOKEN`.) |
+
+And in the **Voice host's** environment (`.env.local` / Vercel project env, the
+process serving the eve agent):
+
+| Var | Purpose |
+|---|---|
+| `CORE_AGENT_SECRET` | Same value as the Convex deployment's — the client in `agent/voice/lib/core.ts` sends it on every call. |
+| `CORE_URL` | Core's HTTP Actions base (`https://<deployment>.convex.site`). Falls back to `NEXT_PUBLIC_CONVEX_SITE_URL`, which co-located deploys already have. |
+| `VOICE_TRIGGER_SECRET` | Same value as the Convex deployment's — the trigger route checks it. |
+| `VOICE_DEV_PHONE` | Optional, dev/evals only: stands in for the Photon principal on channels with no Photon auth. Still resolves through Core. |
 
 ---
 
