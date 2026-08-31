@@ -334,13 +334,15 @@ Do not set it because a statement sounded confident. An unconfirmed inference is
 **Evidence is required.** `confirmedInline: true` without `evidence.quotedReply`
 is a `400` and nothing lands. Quote the student's confirming reply *verbatim*
 ("yeah", "yes friday works") and pass the Photon message id of that reply as
-`inboundMessageId` when you have it. This is **accountability, not proof**: Core
-cannot yet verify the quote, but it is stored on the change and shown in the
-Dashboard feed as `confirmed in chat: "yeah"`, so a claimed approval is always
-visible and contestable by the student. The upgrade path — verifying
-`inboundMessageId` against the stored inbound message log — lands with webhook
-dedupe (the "Needs from Core" list); write real ids now so old approvals become
-verifiable retroactively.
+`inboundMessageId` when you have it (the channel surfaces it as `[msgId …]`).
+
+**A supplied `inboundMessageId` is verified.** Core keeps an inbound message log
+(written by `POST /voice/recordInbound` before every dispatched turn, §7b); an
+id that does not match a logged message *from this student* is a fabricated
+citation, and the whole change is a `400` — nothing lands. A quoted reply with
+no id remains allowed and is accountability-only: it is stored on the change and
+shown in the Dashboard feed as `confirmed in chat: "yeah"`, visible and
+contestable by the student. Always pass the real id when the channel showed one.
 
 A `conflict: true` change is never auto-applied. (Nothing from Voice ever is;
 `conflict` matters for the adapters, and marking it tells the feed *why* the
@@ -460,6 +462,51 @@ optional, so a call made before the student is resolved is still costed.
 Negative or non-finite token counts are floored to `0` rather than stored.
 
 **Response `200`** — `{ "ok": true, "usageId": "r66g..." }`
+
+---
+
+## 7b. `POST /voice/recordInbound` — *dedupe, warming, and the evidence log*
+
+Called by the Photon channel's `onMessage` **before dispatching a turn**
+(`agent/voice/channels/photon.ts`). Photon delivers webhooks at least once (up
+to 6 attempts, no ordering, no DLQ) and eve does not dedupe, so Core owns the
+seen-set. Three jobs in one write:
+
+1. **Dedupe.** The documented key is `{webhookId}:{message.id}`; eve does not
+   surface the `X-Spectrum-Webhook-Id` header to `onMessage`, so the key
+   degrades to `photon:<messageId>` — equivalent for a single registered
+   webhook, since message ids are unique per message. `duplicate: true` means
+   *do not dispatch* — return `null` from `onMessage`.
+2. **Contact warming.** Each accepted (non-duplicate) inbound bumps
+   `students.inboundCount`. Photon caps a line at 10 replies to a contact who
+   has sent fewer than 3 messages, so the nightly trigger (§8) is gated on
+   `inboundCount ≥ 3`.
+3. **The evidence log.** Rows are what `evidence.inboundMessageId` (§4) is
+   verified against.
+
+Log rows are pruned after ~48h (the dedupe window Photon documents); the
+`inboundCount` and any evidence copied onto a change survive the prune.
+
+**Request**
+
+```json
+{
+  "phone": "+15551234567",
+  "messageId": "msg_2f9c...",
+  "webhookId": "wh_...",
+  "text": "yeah friday works"
+}
+```
+
+`phone` and `messageId` are required. An unknown (or ambiguous) number is still
+logged so its redeliveries dedupe; `studentId` is simply absent from the
+response.
+
+**Response `200`**
+
+```json
+{ "ok": true, "duplicate": false, "studentId": "j57a...", "warmed": true }
+```
 
 ---
 

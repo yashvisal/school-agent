@@ -76,6 +76,7 @@ const ROUTES = [
   "/voice/recordSignal",
   "/voice/logUsage",
   "/voice/resolveStudent",
+  "/voice/recordInbound",
 ] as const
 
 // ---------------------------------------------------------------------------
@@ -333,6 +334,19 @@ describe("proposeChange", () => {
     const t = setupTest()
     const seeded = await seed(t)
 
+    // The cited confirming message is in the inbound log (as the Photon
+    // channel's recordInbound call would have put it).
+    await t.run(async (ctx) => {
+      await ctx.db.insert("inboundMessages", {
+        studentId: seeded.studentId,
+        phone: "+15551234567",
+        messageId: "msg_123",
+        dedupeKey: "photon:msg_123",
+        text: "yeah friday works",
+        receivedAt: Date.now(),
+      })
+    })
+
     const response = await post(t, "/voice/proposeChange", {
       studentId: seeded.studentId,
       change: {
@@ -399,6 +413,88 @@ describe("proposeChange", () => {
     expect(response.status).toBe(400)
     const changes = await t.run(async (ctx) => ctx.db.query("changes").take(10))
     expect(changes).toHaveLength(0)
+  })
+
+  test("a fabricated inboundMessageId is a 400 through the route", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    const response = await post(t, "/voice/proposeChange", {
+      studentId: seeded.studentId,
+      change: {
+        courseId: seeded.courseId,
+        kind: "deadline_added",
+        entity: { table: "deadlines" },
+        after: { title: "Midterm", kind: "exam" },
+        confirmedInline: true,
+        evidence: { quotedReply: "yeah", inboundMessageId: "msg_fabricated" },
+      },
+    })
+    expect(response.status).toBe(400)
+    const deadlines = await t.run(async (ctx) => ctx.db.query("deadlines").take(10))
+    expect(deadlines).toHaveLength(0)
+  })
+})
+
+describe("recordInbound", () => {
+  test("logs, counts toward warmed, and dedupes a redelivery", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+
+    const first = await post(t, "/voice/recordInbound", {
+      phone: "+15551234567",
+      messageId: "msg_a",
+      text: "hey",
+    })
+    expect(first.status).toBe(200)
+    await expect(first.json()).resolves.toMatchObject({
+      ok: true,
+      duplicate: false,
+      studentId: seeded.studentId,
+      warmed: false,
+    })
+
+    // Photon redelivery of the same message: dropped, not double-counted.
+    const replay = await post(t, "/voice/recordInbound", {
+      phone: "+15551234567",
+      messageId: "msg_a",
+      text: "hey",
+    })
+    await expect(replay.json()).resolves.toMatchObject({
+      ok: true,
+      duplicate: true,
+    })
+
+    await post(t, "/voice/recordInbound", { phone: "+15551234567", messageId: "msg_b" })
+    const third = await post(t, "/voice/recordInbound", {
+      phone: "+15551234567",
+      messageId: "msg_c",
+    })
+    // Third distinct inbound message: the contact is warmed.
+    await expect(third.json()).resolves.toMatchObject({ ok: true, warmed: true })
+
+    const student = await t.run(async (ctx) => ctx.db.get("students", seeded.studentId))
+    expect(student?.inboundCount).toBe(3)
+  })
+
+  test("an unknown number is still logged (for dedupe), with no student", async () => {
+    const t = setupTest()
+    await seed(t)
+    const response = await post(t, "/voice/recordInbound", {
+      phone: "+15550000000",
+      messageId: "msg_x",
+    })
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { studentId?: string; duplicate: boolean }
+    expect(body.duplicate).toBe(false)
+    expect(body.studentId).toBeUndefined()
+  })
+
+  test("a missing phone or messageId is a 400", async () => {
+    const t = setupTest()
+    const noPhone = await post(t, "/voice/recordInbound", { messageId: "msg_y" })
+    expect(noPhone.status).toBe(400)
+    const noId = await post(t, "/voice/recordInbound", { phone: "+15551234567" })
+    expect(noId.status).toBe(400)
   })
 })
 

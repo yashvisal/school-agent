@@ -250,6 +250,34 @@ export const studentFields = {
   status: studentStatusV,
   /** Local hour (0-23) the nightly precompute + Voice trigger should run. */
   nightlyHourLocal: v.optional(v.number()),
+  /**
+   * Lifetime count of deduped inbound iMessages (`inboundMessages` rows have a
+   * TTL; the count does not). Photon suppresses proactive sends to a contact
+   * who has sent fewer than 3 messages (voice.md "Deliverability"), so the
+   * nightly trigger is gated on this reaching `WARMED_MIN_INBOUND`.
+   */
+  inboundCount: v.optional(v.number()),
+}
+
+/**
+ * The inbound iMessage log — one row per accepted (non-duplicate) webhook
+ * message. Three jobs: webhook dedupe (Photon delivers at least once, eve does
+ * not dedupe), the contact-warmed count feeding `students.inboundCount`, and
+ * verification of `evidence.inboundMessageId` on inline confirmations. Rows are
+ * pruned after `INBOUND_TTL_MS` (~48h); anything that must outlive that is
+ * copied elsewhere (the count to `students`, the evidence onto the change).
+ */
+export const inboundMessageFields = {
+  /** Absent when the number resolved to no (or more than one) student. */
+  studentId: v.optional(v.id("students")),
+  /** Normalized E.164. */
+  phone: v.string(),
+  /** Photon message id. */
+  messageId: v.string(),
+  /** `${webhookId}:${messageId}` — the documented Photon dedupe key. */
+  dedupeKey: v.string(),
+  text: v.optional(v.string()),
+  receivedAt: v.number(),
 }
 
 export const courseFields = {

@@ -81,13 +81,31 @@ export async function proposeChangeInternal(
   // `confirmedInline` rests on the model's honesty; the evidence requirement is
   // ACCOUNTABILITY, not proof — the quoted reply lands in the change feed so a
   // student can see exactly what "approval" the agent claims ("confirmed in
-  // chat: 'yeah'") and contest a fabricated one. Verifying `inboundMessageId`
-  // against the stored inbound log is the upgrade path once webhook dedupe
-  // lands (VOICE_TOOLS.md §4).
+  // chat: 'yeah'") and contest a fabricated one.
   if (input.confirmedInline && !input.evidence?.quotedReply?.trim()) {
     throw new Error(
       "400: confirmedInline requires evidence.quotedReply — the student's confirming reply, quoted verbatim"
     )
+  }
+
+  // When the claim also names the confirming message, it must actually exist in
+  // the inbound log (written by the Voice channel before every dispatch, TTL'd
+  // well past any live conversation) and belong to THIS student. A quoted reply
+  // without an id remains allowed — accountability-only — but a wrong id is a
+  // fabricated citation and the whole change is refused (VOICE_TOOLS.md §4).
+  if (input.confirmedInline && input.evidence?.inboundMessageId) {
+    const messageId = input.evidence.inboundMessageId
+    const logged = await ctx.db
+      .query("inboundMessages")
+      .withIndex("by_student_messageId", (q) =>
+        q.eq("studentId", input.studentId).eq("messageId", messageId)
+      )
+      .first()
+    if (!logged) {
+      throw new Error(
+        "400: evidence.inboundMessageId does not match any stored inbound message from this student"
+      )
+    }
   }
 
   let status: ChangeStatus

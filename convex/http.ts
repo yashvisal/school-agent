@@ -18,8 +18,9 @@ import {
 /**
  * The agent HTTP surface — how eve's Voice agent reaches Core.
  *
- * Four routes for the tools (three planning tools + usage logging) and one for
- * phone → student resolution. Every one:
+ * Six routes: the three planning tools, usage logging, phone → student
+ * resolution, and the inbound-message log (dedupe / contact-warmed / evidence).
+ * Every one:
  *
  * - requires `Authorization: Bearer <CORE_AGENT_SECRET>` (constant-time compare),
  * - treats the body as `unknown` and narrows each field, 400 on anything else,
@@ -195,6 +196,36 @@ http.route({
       return jsonResponse({ ok: true, usageId })
     } catch (error) {
       return errorToResponse(error, "/voice/logUsage")
+    }
+  }),
+})
+
+// ---------------------------------------------------------------------------
+// recordInbound — webhook dedupe + the contact-warmed count + evidence log
+// ---------------------------------------------------------------------------
+
+http.route({
+  path: "/voice/recordInbound",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const gated = await gate(request)
+    if ("response" in gated) return gated.response
+
+    const phone = asString(gated.body.phone)
+    const messageId = asString(gated.body.messageId)
+    if (!phone) return errorResponse(400, "phone is required")
+    if (!messageId) return errorResponse(400, "messageId is required")
+
+    try {
+      const result = await ctx.runMutation(internal.inbound.record, {
+        phone,
+        messageId,
+        webhookId: asString(gated.body.webhookId),
+        text: asString(gated.body.text),
+      })
+      return jsonResponse({ ok: true, ...result })
+    } catch (error) {
+      return errorToResponse(error, "/voice/recordInbound")
     }
   }),
 })

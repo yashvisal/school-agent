@@ -4,6 +4,7 @@ import {
   changeFields,
   courseFields,
   deadlineFields,
+  inboundMessageFields,
   materialFields,
   planRunFields,
   snapshotFields,
@@ -78,4 +79,11 @@ export default defineSchema({
   planRuns: defineTable(planRunFields)
     .index("by_student_date", ["studentId", "date"])
     .index("by_operationId", ["operationId"]),
+
+  // Webhook dedupe + contact-warmed counting + inline-confirmation evidence
+  // verification. TTL'd via `inbound.prune` (crons.ts).
+  inboundMessages: defineTable(inboundMessageFields)
+    .index("by_dedupeKey", ["dedupeKey"])
+    .index("by_student_messageId", ["studentId", "messageId"])
+    .index("by_receivedAt", ["receivedAt"]),
 })
