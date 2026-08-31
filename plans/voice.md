@@ -81,6 +81,26 @@ What we learned, and why it's shaped this way:
 
 **Decision stands: Voice runs on eve. `convex/voice/` never exists.**
 
+### Integration pass (2026-08-31) — the seams are wired
+
+- **One trigger path.** Core's nightly POSTs the Voice trigger route
+  (`{EVE_VOICE_URL}/eve/agents/voice/eve/v1/trigger`, `x-voice-trigger-secret` =
+  `VOICE_TRIGGER_SECRET` on both sides); eve's generic `POST /eve/v1/session` is retired for the
+  nightly — a session created there answers on the HTTP channel, not Photon. `EVE_VOICE_TOKEN` is
+  gone. Contract: VOICE_TOOLS.md §8.
+- **The spike stub is gone.** `agent/voice/lib/core.ts` is now the HTTP client for Core's
+  `/voice/*` routes; identity is phone → `resolveStudent` (Convex `students`), `VOICE_DEMO_PHONE`
+  replaced by real mapping (+ optional `VOICE_DEV_PHONE` for dev/eval channels). Usage rows go to
+  Core's `usage` table per model step.
+- **"Needs from Core" delivered:** webhook dedupe (`/voice/recordInbound`, keyed on the message id
+  since eve hides the webhook header — VOICE_TOOLS.md §7b), contact-warmed tracking
+  (`students.inboundCount`, nightly gates on ≥3), and `evidence.inboundMessageId` is now
+  *verified* against the inbound log (a fabricated citation is a 400).
+- Verified live on the dev deployment through a quick tunnel: `nightly:runNow` → trigger 202 →
+  eve session → `getFeasibleActions` returned the stored snapshot (`cached: true`, matching
+  `planRunId`) → usage logged with studentId + cost. The final Photon delivery leg needs a
+  registered contact (the founder's) — the send fails cleanly for an unregistered test number.
+
 Attachments (item 3): outbound text + PDF + PNG delivered to the founder's phone through the Spectrum SDK (`scripts/send-attachment.mjs`, message ids logged); inbound verified with a correctly-signed replay (200; bad signature → 401) carrying a PDF and a PNG — `onMessage` logs name/type/size for each. Live inbound from the phone is the founder's check.
 
 ### Inbound mechanics (item 1)
