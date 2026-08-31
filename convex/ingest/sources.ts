@@ -152,6 +152,25 @@ export function validateSourceConfig(kind: string, config: unknown): void {
       }
       return
     }
+    case "site": {
+      if (isFixture) return
+      // A course site is fetched server-side by `ingest/site.ts`, and the links
+      // it discovers in the response are fetched too, so the seed gets exactly
+      // the same treatment as an iCal feed.
+      requireFetchableUrl("site config.url", bag.url)
+      return
+    }
+    case "syllabus":
+    case "schedule": {
+      // Uploads, not feeds: nothing here is ever fetched from the network, so
+      // there is no URL to require. The config carries Convex references
+      // (`storageId`, `courseId`) that `ingest/uploads.ts` sets server-side.
+      // A URL is not *needed*, but if one is supplied it must still be safe —
+      // an unchecked url on a source row is a lever waiting for the next
+      // adapter that decides to fetch it.
+      if (bag.url !== undefined) requireFetchableUrl(`${kind} config.url`, bag.url)
+      return
+    }
     default:
       throw new Error(`400: sources.add does not accept kind "${kind}" yet`)
   }

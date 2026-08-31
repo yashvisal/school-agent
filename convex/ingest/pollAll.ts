@@ -14,16 +14,24 @@ import { internalAction } from "../_generated/server"
  */
 export const pollAll = internalAction({
   args: {
-    kinds: v.optional(v.array(v.union(v.literal("canvas"), v.literal("ical")))),
+    kinds: v.optional(
+      v.array(v.union(v.literal("canvas"), v.literal("ical"), v.literal("site")))
+    ),
     limit: v.optional(v.number()),
   },
   returns: v.object({
     scheduled: v.number(),
     canvas: v.number(),
     ical: v.number(),
+    site: v.number(),
   }),
   handler: async (ctx, args) => {
-    const kinds = args.kinds ?? ["canvas", "ical"]
+    // Course sites join the sweep; the two UPLOAD adapters (syllabus, schedule)
+    // deliberately do not. An upload has no source to re-poll — the document
+    // only changes when the student uploads a new one, which is an event, not a
+    // schedule. Re-running them on a cron would re-extract identical markdown
+    // every 30 minutes and bill for it.
+    const kinds = args.kinds ?? ["canvas", "ical", "site"]
     const sources = await ctx.runQuery(internal.ingest.sources.listEnabled, {
       kinds,
       ...(args.limit !== undefined ? { limit: args.limit } : {}),
@@ -31,6 +39,7 @@ export const pollAll = internalAction({
 
     let canvas = 0
     let ical = 0
+    let site = 0
     for (const source of sources) {
       if (source.kind === "canvas") {
         await ctx.scheduler.runAfter(0, internal.ingest.canvas.poll, {
@@ -42,9 +51,14 @@ export const pollAll = internalAction({
           sourceId: source._id,
         })
         ical++
+      } else if (source.kind === "site") {
+        await ctx.scheduler.runAfter(0, internal.ingest.site.run, {
+          sourceId: source._id,
+        })
+        site++
       }
     }
 
-    return { scheduled: canvas + ical, canvas, ical }
+    return { scheduled: canvas + ical + site, canvas, ical, site }
   },
 })
