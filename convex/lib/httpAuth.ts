@@ -117,14 +117,22 @@ const CODED_STATUSES: ReadonlySet<number> = new Set([400, 401, 403, 404, 409])
  * thrown message — `throw new Error("404: student not found")`. Parsing that in
  * one place keeps the convention structured instead of re-implemented per route,
  * and keeps every *unrecognised* error out of the response body.
+ *
+ * On a deployed backend the coded message does not arrive at the START of the
+ * string: `ctx.runMutation`/`ctx.runQuery` wrap it, e.g.
+ * `"[Request ID: …] Server Error\nUncaught Error: 400: …"`. (convex-test does
+ * not wrap, which is why an anchored `^` regex passed every unit test and still
+ * 500'd in production.) So the code is matched at a message-start boundary
+ * anywhere in the string, and the extracted message stops at the line break so
+ * no stack fragment leaks into the response.
  */
 export function codedError(
   error: unknown
 ): { status: number; message: string } | null {
   const message = error instanceof Error ? error.message : String(error)
-  const match = /^(\d{3}):\s*(.*)$/.exec(message)
+  const match = /(?:^|Error:\s+)(\d{3}):\s*([^\n]*)/.exec(message)
   if (!match) return null
   const status = Number(match[1])
   if (!CODED_STATUSES.has(status)) return null
-  return { status, message: match[2] || message }
+  return { status, message: match[2].trim() || message }
 }
