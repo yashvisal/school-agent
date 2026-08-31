@@ -5,10 +5,22 @@
   },
   "gradingScheme": {
     "categories": [
-      { "name": "Problem sets", "weight": 30 },
-      { "name": "Completion of mandatory finger exercises", "weight": 10 },
-      { "name": "Midterm Quiz", "weight": 20 },
-      { "name": "Final Quiz", "weight": 40 }
+      {
+        "name": "Problem sets",
+        "weight": 30
+      },
+      {
+        "name": "Completion of mandatory finger exercises",
+        "weight": 10
+      },
+      {
+        "name": "Midterm Quiz",
+        "weight": 20
+      },
+      {
+        "name": "Final Quiz",
+        "weight": 40
+      }
     ],
     "notes": "Before the final quiz, students may drop up to 2 problem sets. If dropped, the percent that the problem sets are worth will be rolled into the final quiz score."
   },
@@ -37,13 +49,12 @@
       "pageRef": "Problem Sets"
     },
     {
-      "title": "Problem Set 1",
+      "title": "Mandatory finger exercises",
       "kind": "homework",
-      "pointsPossible": 10,
-      "category": "Problem sets",
+      "category": "Completion of mandatory finger exercises",
       "confidence": 0.5,
-      "sourceText": "Starting with Problem Set 1, additional late days can be accumulated for each assignment, one late day for each day the assignment is turned in ahead of the deadline.",
-      "pageRef": "Late Days"
+      "sourceText": "Completion of mandatory finger exercises | 10%",
+      "pageRef": "Grading"
     }
   ]
 }
