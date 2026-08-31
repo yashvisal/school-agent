@@ -3,7 +3,9 @@ import { v } from "convex/values"
 import { internal } from "../_generated/api"
 import type { Doc, Id } from "../_generated/dataModel"
 import { internalAction, internalMutation, internalQuery } from "../_generated/server"
+import { WARMED_MIN_INBOUND } from "../inbound"
 import { hashSnapshotPayload } from "../lib/diff"
+import { normalizePhone } from "../lib/phone"
 import {
   canvasFixturePayload,
   FIXTURE_BASE_URL,
@@ -265,6 +267,42 @@ export const applyScenario = internalAction({
   },
 })
 
+/**
+ * DEV ONLY — point the fixture student at a real identity so the full loop can
+ * run: the founder's phone (Voice resolves inbound texts and the nightly
+ * trigger addresses the Photon thread by number) and/or his Clerk id (so the
+ * Dashboard shows the fixture semester when he signs in). `warmed: true` seeds
+ * `inboundCount` past the trigger gate — correct for a contact that already
+ * exchanged texts with the line during Spike A; leave it unset for a fresh
+ * number and let real inbound texts warm it.
+ *
+ *   npx convex run dev/seed:linkIdentity '{"phone":"+1...","clerkId":"user_...","warmed":true}'
+ */
+export const linkIdentity = internalMutation({
+  args: {
+    phone: v.optional(v.string()),
+    clerkId: v.optional(v.string()),
+    warmed: v.optional(v.boolean()),
+    fixtureClerkId: v.optional(v.string()),
+  },
+  returns: v.id("students"),
+  handler: async (ctx, args) => {
+    const student = await ctx.db
+      .query("students")
+      .withIndex("by_clerkId", (q) => q.eq("clerkId", args.fixtureClerkId ?? DEV_CLERK_ID))
+      .unique()
+    if (!student) throw new Error("404: run dev/seed:fixtureSemester first")
+    await ctx.db.patch("students", student._id, {
+      ...(args.phone !== undefined ? { phone: normalizePhone(args.phone) } : {}),
+      ...(args.clerkId !== undefined ? { clerkId: args.clerkId } : {}),
+      ...(args.warmed !== undefined
+        ? { inboundCount: args.warmed ? WARMED_MIN_INBOUND : 0 }
+        : {}),
+    })
+    return student._id
+  },
+})
+
 /** Deletes every row belonging to the fixture student, across all tables. */
 export const reset = internalMutation({
   args: { clerkId: v.optional(v.string()) },
@@ -356,6 +394,13 @@ export const reset = internalMutation({
       .withIndex("by_student_at", (q) => q.eq("studentId", student._id))
       .take(1000)) {
       await ctx.db.delete("usage", row._id)
+      deleted++
+    }
+    for (const row of await ctx.db
+      .query("inboundMessages")
+      .withIndex("by_student_messageId", (q) => q.eq("studentId", student._id))
+      .take(1000)) {
+      await ctx.db.delete("inboundMessages", row._id)
       deleted++
     }
 
