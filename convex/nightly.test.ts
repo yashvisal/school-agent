@@ -679,6 +679,49 @@ describe("tick", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
+  test("a warming-gate skip is retried once the student warms", async () => {
+    const t = setupTest()
+    const { studentId } = await seed(t, { inboundCount: 1 })
+
+    await t.action(internal.nightly.tick, { now: NIGHTLY_NOW })
+    await drain(t)
+    expect((await runsFor(t))[0].triggerStatus).toBe("skipped")
+    expect((await runsFor(t))[0].error).toBe("contact not warmed (1/3 inbound)")
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    // The student texts twice more; the next tick in the window reconsiders.
+    await t.run(async (ctx) => ctx.db.patch("students", studentId, { inboundCount: 3 }))
+    const second = await t.action(internal.nightly.tick, {
+      now: NIGHTLY_NOW + 60 * 60 * 1000,
+    })
+    await drain(t)
+
+    expect(second.started).toBe(1)
+    const runs = await runsFor(t)
+    expect(runs).toHaveLength(1)
+    expect(runs[0].triggerStatus).toBe("triggered")
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  test("a no-Voice-attached skip stays terminal — later ticks do not recompute it", async () => {
+    vi.stubEnv("EVE_VOICE_URL", "")
+    const t = setupTest()
+    await seed(t)
+
+    await t.action(internal.nightly.tick, { now: NIGHTLY_NOW })
+    await drain(t)
+    expect((await runsFor(t))[0].error).toBe("EVE_VOICE_URL not set")
+
+    const second = await t.action(internal.nightly.tick, {
+      now: NIGHTLY_NOW + 60 * 60 * 1000,
+    })
+    await drain(t)
+
+    expect(second.started).toBe(0)
+    expect(await runsFor(t)).toHaveLength(1)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   test("a triggered run is never restarted by a later tick", async () => {
     const t = setupTest()
     await seed(t)

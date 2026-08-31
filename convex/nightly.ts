@@ -102,6 +102,7 @@ export const findRun = internalQuery({
       triggerStatus: triggerStatusV,
       computedAt: v.number(),
       voiceSessionId: v.optional(v.string()),
+      error: v.optional(v.string()),
     })
   ),
   handler: async (ctx, args) => {
@@ -115,6 +116,7 @@ export const findRun = internalQuery({
       triggerStatus: run.triggerStatus,
       computedAt: run.computedAt,
       voiceSessionId: run.voiceSessionId,
+      error: run.error,
     }
   },
 })
@@ -270,21 +272,47 @@ export const STUCK_PENDING_MS = 60 * 60 * 1000
 export const RETRY_WINDOW_HOURS = 6
 
 /**
+ * Skip reasons that can clear within the retry window: the student adds a
+ * phone, sends their third text, or the operator sets the missing secret. A
+ * run skipped for one of these is reconsidered by later ticks, so the student
+ * still gets that day's push once the gate opens. Everything else skipped is
+ * genuinely terminal for the day — most importantly `EVE_VOICE_URL not set`
+ * (every dev deployment with no Voice attached) and an unusable timezone,
+ * which retrying would only recompute pointlessly every hour.
+ */
+const RECOVERABLE_SKIP_PREFIXES = [
+  "no phone on file",
+  "contact not warmed",
+  "VOICE_TRIGGER_SECRET not set",
+] as const
+
+export function isRecoverableSkip(error: string | undefined): boolean {
+  return (
+    error !== undefined &&
+    RECOVERABLE_SKIP_PREFIXES.some((prefix) => error.startsWith(prefix))
+  )
+}
+
+/**
  * Whether this tick should (re)start the pass for a student-day.
  *
- * `triggered` and `skipped` are terminal — the student either got their text or
- * this deployment has no Voice to send one. A `failed` run is the whole point of
- * running hourly: eve was down, and the next pass retries (CR 3892156113). A run
- * still `pending` an hour later never reached its trigger and is retried too.
+ * `triggered` is terminal — the student got their text. `skipped` is terminal
+ * unless the reason is a recoverable gate (above). A `failed` run is the whole
+ * point of running hourly: eve was down, and the next pass retries
+ * (CR 3892156113). A run still `pending` an hour later never reached its
+ * trigger and is retried too.
  */
 function shouldRun(
-  existing: { triggerStatus: TriggerStatus; computedAt: number } | null,
+  existing: {
+    triggerStatus: TriggerStatus
+    computedAt: number
+    error?: string
+  } | null,
   now: number
 ): boolean {
   if (!existing) return true
-  if (existing.triggerStatus === "triggered" || existing.triggerStatus === "skipped") {
-    return false
-  }
+  if (existing.triggerStatus === "triggered") return false
+  if (existing.triggerStatus === "skipped") return isRecoverableSkip(existing.error)
   if (existing.triggerStatus === "failed") return true
   return now - existing.computedAt > STUCK_PENDING_MS
 }
@@ -354,6 +382,7 @@ export const tick = internalAction({
           triggerStatus: TriggerStatus
           computedAt: number
           voiceSessionId?: string
+          error?: string
         } | null = await ctx.runQuery(internal.nightly.findRun, {
           operationId: operationIdFor(student._id, date),
         })
@@ -430,8 +459,9 @@ export const runForStudent = internalAction({
     // addresses the Photon thread by number) and is gated on the contact being
     // warmed: Photon limits a line to 10 replies until a contact has sent ≥3
     // messages (voice.md "Deliverability"), so a push before that burns the
-    // budget error-texting into a wall. Both gates are `skipped`, not `failed`:
-    // there is nothing to retry until the student acts.
+    // budget error-texting into a wall. Both gates are `skipped`, not `failed`
+    // — but they are RECOVERABLE skips (`isRecoverableSkip`), so a later tick
+    // inside the retry window reconsiders them once the student acts.
     const student: Doc<"students"> | null = await ctx.runQuery(internal.students.get, {
       studentId: args.studentId,
     })
