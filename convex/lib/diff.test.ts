@@ -266,6 +266,12 @@ describe("submission status transitions", () => {
     expect((proposals[0].after as { score?: number | null }).score).toBeNull()
   })
 
+  test("graded -> excused also clears the withdrawn score", () => {
+    const proposals = diffDeadlines([deadline("graded", 88)], [deadline("excused")])
+    expect(proposals.map((p) => p.kind)).toEqual(["deadline_updated"])
+    expect((proposals[0].after as { score?: number | null }).score).toBeNull()
+  })
+
   test("forward transitions are unchanged", () => {
     expect(
       diffDeadlines([deadline("unsubmitted")], [deadline("submitted")]).map((p) => p.kind)

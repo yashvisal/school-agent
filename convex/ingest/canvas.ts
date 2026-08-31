@@ -109,6 +109,7 @@ export const ingestPayload = internalMutation({
       studentId: source.studentId,
       proposals: diffState(previousState, nextState),
       origin: "canvas",
+      snapshotId,
       snapshotIds,
       courseIds,
     })

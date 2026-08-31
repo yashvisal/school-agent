@@ -126,6 +126,34 @@ describe("fetchAll", () => {
     expect(calls).toHaveLength(3)
   })
 
+  test("a next link pointing at a private host is refused, token unsent", async () => {
+    const calls: string[] = []
+    // First page redirects pagination at the cloud metadata endpoint — the
+    // bearer token must never follow it (CR 3897465401).
+    const fetchFn: FetchFn = async (url) => {
+      calls.push(url)
+      return {
+        status: 200,
+        headers: {
+          get: (n: string) =>
+            n === "Link"
+              ? `<http://169.254.169.254/latest/meta-data/>; rel="next"`
+              : null,
+        },
+        text: async () => JSON.stringify([{ id: 1 }]),
+      }
+    }
+
+    await expect(
+      fetchAll("https://canvas.example.edu", "t", "/api/v1/x", {}, {
+        fetchFn,
+        sleep: noSleep,
+      })
+    ).rejects.toThrow(/unsafe pagination link/)
+    // Only the legitimate first page was ever fetched.
+    expect(calls).toHaveLength(1)
+  })
+
   test("MAX_PAGES is the default ceiling", () => {
     expect(MAX_PAGES).toBe(50)
   })

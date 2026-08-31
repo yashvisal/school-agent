@@ -177,6 +177,9 @@ export type ApplyProposalsInput = {
   studentId: Id<"students">
   proposals: ChangeProposal[]
   origin: ChangeOrigin
+  /** Snapshot this batch was derived FROM; stamped onto each fact's provenance. */
+  snapshotId: Id<"snapshots">
+  /** Snapshots that explain the diff (prev first, when any); stored on the change row. */
   snapshotIds: Id<"snapshots">[]
   /** External course key → Convex id. Mutated as `course_added` changes apply. */
   courseIds: Map<string, Id<"courses">>
@@ -223,12 +226,12 @@ export async function applyProposals(
 ): Promise<ApplyProposalsResult> {
   const result: ApplyProposalsResult = { proposed: 0, applied: 0, pending: 0, skipped: 0 }
 
-  // The snapshot this batch was derived FROM is the last id in the list (the
-  // previous snapshot, when there is one, comes first). core.md requires every
-  // stored fact to carry the snapshot that produced it, so it is stamped onto
-  // each proposal's provenance before the change is written — the change row's
-  // `snapshotIds` explains the diff, `provenance.snapshotId` explains the row.
-  const snapshotId = input.snapshotIds[input.snapshotIds.length - 1]
+  // core.md requires every stored fact to carry the snapshot that produced it;
+  // it is stamped onto each proposal's provenance before the change is written.
+  // The id is passed explicitly rather than read off `snapshotIds` ordering
+  // (CR 3897465438): the change row's `snapshotIds` explains the diff,
+  // `provenance.snapshotId` explains the row.
+  const snapshotId = input.snapshotId
 
   for (const proposal of input.proposals) {
     let courseId: Id<"courses"> | undefined

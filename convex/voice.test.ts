@@ -463,7 +463,9 @@ describe("proposeChange", () => {
     expect(deadlines).toHaveLength(1)
     expect(deadlines[0].provenance.source).toBe("chat")
     expect(deadlines[0].provenance.sourceRef).toBe(result.changeId)
-    expect(deadlines[0].provenance.confidence).toBe(0.5)
+    // The forged SOURCE is replaced; the in-range numeric confidence is the
+    // one thing a caller may assert (CR 3897465420).
+    expect(deadlines[0].provenance.confidence).toBe(1)
   })
 
   test("the reported tier matches the row that was written", async () => {
@@ -693,6 +695,8 @@ describe("normalizePhone", () => {
   test("produces E.164 for the shapes a human or Photon can supply", () => {
     expect(normalizePhone("+1 (555) 123-4567")).toBe("+15551234567")
     expect(normalizePhone("5551234567")).toBe("+15551234567")
+    // 00 is the international access prefix; E.164 spells it "+".
+    expect(normalizePhone("0044 20 7946 0958")).toBe("+442079460958")
     expect(normalizePhone("+44 20 7946 0958")).toBe("+442079460958")
   })
 

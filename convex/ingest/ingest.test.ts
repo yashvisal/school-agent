@@ -297,7 +297,8 @@ describe("a non-Canvas feed", () => {
     expect(courseAdded[0].status).toBe("applied")
     expect(courseAdded[0].snapshotIds.length).toBeGreaterThanOrEqual(1)
     expect(calendarCourse?.provenance.source).toBe("ical")
-    expect(calendarCourse?.provenance.snapshotId).toBe(courseAdded[0].snapshotIds.at(-1))
+    // `fallbackProvenance` records the FIRST snapshot id of the change (CR 3897465368).
+    expect(calendarCourse?.provenance.snapshotId).toBe(courseAdded[0].snapshotIds[0])
   })
 })
 

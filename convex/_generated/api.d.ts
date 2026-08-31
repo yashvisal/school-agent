@@ -31,6 +31,7 @@ import type * as lib_httpAuth from "../lib/httpAuth.js";
 import type * as lib_ical_parse from "../lib/ical/parse.js";
 import type * as lib_ingest from "../lib/ingest.js";
 import type * as lib_merge from "../lib/merge.js";
+import type * as lib_net from "../lib/net.js";
 import type * as lib_normalized from "../lib/normalized.js";
 import type * as lib_phone from "../lib/phone.js";
 import type * as lib_planner from "../lib/planner.js";
@@ -73,6 +74,7 @@ declare const fullApi: ApiFromModules<{
   "lib/ical/parse": typeof lib_ical_parse;
   "lib/ingest": typeof lib_ingest;
   "lib/merge": typeof lib_merge;
+  "lib/net": typeof lib_net;
   "lib/normalized": typeof lib_normalized;
   "lib/phone": typeof lib_phone;
   "lib/planner": typeof lib_planner;

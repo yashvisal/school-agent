@@ -174,6 +174,7 @@ export const ingestPayload = internalMutation({
       studentId: source.studentId,
       proposals: [...reconciled.proposals, ...ownProposals],
       origin: "ical",
+      snapshotId,
       snapshotIds,
       courseIds,
       ...(fallbackCourseId ? { fallbackCourseId } : {}),

@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest"
 
 import { api, internal } from "./_generated/api"
 import type { Id } from "./_generated/dataModel"
+import { INTERPRETED_FALLBACK_CONFIDENCE } from "./lib/changes"
 import { CLERK_ID, setupTest } from "./test.setup"
 
 /**
@@ -523,7 +524,8 @@ describe("provenance", () => {
       entity: { table: "deadlines" },
       after: deadlineAfter(courseId, {
         title: "Heard in chat",
-        provenance: { source: "canvas", sourceRef: "assignments/5001", confidence: 1 },
+        // A forged source AND an out-of-range confidence: neither survives.
+        provenance: { source: "canvas", sourceRef: "assignments/5001", confidence: 7 },
       }),
       origin: "chat",
       confirmedInline: true,
@@ -533,7 +535,34 @@ describe("provenance", () => {
     expect(deadlines[0].provenance).toEqual({
       source: "chat",
       sourceRef: changeId,
-      confidence: 0.5,
+      confidence: INTERPRETED_FALLBACK_CONFIDENCE,
+    })
+  })
+
+  test("a chat change may supply a real confidence, but never a source", async () => {
+    const t = setupTest()
+    const { studentId, courseId } = await seed(t)
+
+    const { changeId } = await t.mutation(internal.changes.propose, {
+      studentId,
+      courseId,
+      kind: "deadline_added",
+      entity: { table: "deadlines" },
+      // The caller asserts a measured confidence AND a forged source; only the
+      // number survives (CR 3897465420).
+      after: deadlineAfter(courseId, {
+        title: "Extracted from syllabus screenshot",
+        provenance: { source: "canvas", sourceRef: "forged", confidence: 0.9 },
+      }),
+      origin: "chat",
+      confirmedInline: true,
+    })
+
+    const deadlines = await t.run(async (ctx) => ctx.db.query("deadlines").take(10))
+    expect(deadlines[0].provenance).toEqual({
+      source: "chat",
+      sourceRef: changeId,
+      confidence: 0.9,
     })
   })
 

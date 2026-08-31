@@ -361,7 +361,19 @@ function fallbackProvenance(change: Doc<"changes">) {
  * for `chat` and `manual` it is replaced with what we know to be true.
  */
 function provenanceFor(change: Doc<"changes">, after: Bag) {
-  if (CALLER_ASSERTED_ORIGINS.has(change.origin)) return fallbackProvenance(change)
+  if (CALLER_ASSERTED_ORIGINS.has(change.origin)) {
+    // The SOURCE claim is always replaced (chat cannot claim Canvas), but a
+    // numeric confidence is honoured: an extractor's own number is a real
+    // measurement, unlike the labelled fallback (CR 3897465420).
+    const supplied = (after.provenance as { confidence?: unknown } | undefined)
+      ?.confidence
+    return {
+      ...fallbackProvenance(change),
+      ...(typeof supplied === "number" && supplied >= 0 && supplied <= 1
+        ? { confidence: supplied }
+        : {}),
+    }
+  }
   return (after.provenance as Doc<"deadlines">["provenance"]) ?? fallbackProvenance(change)
 }
 

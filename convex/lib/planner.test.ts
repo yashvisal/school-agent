@@ -412,7 +412,7 @@ describe("hard guarantee — fits never end after dueAt", () => {
     expect(result.options).toEqual([])
   })
 
-  test("a deadline due earlier today is emitted as overdue, but nothing fits", () => {
+  test("a deadline due earlier today is not overdue yet, and nothing fits", () => {
     const result = plan({
       date: MON,
       now: at(MON, 15 * 60),

@@ -14,7 +14,11 @@
  * number that looks real.
  */
 export function normalizePhone(raw: string): string {
-  const digits = raw.replace(/[^\d]/g, "")
+  // `00` is the international access prefix in much of the world; E.164 spells
+  // the same thing as `+`. Keeping the zeros would store a number no inbound
+  // `+`-form lookup can match (CR 3897465448). Safe because no E.164 country
+  // code starts with 0.
+  const digits = raw.replace(/[^\d]/g, "").replace(/^00/, "")
   if (!digits) return raw.trim()
   return `+${digits.length === 10 ? `1${digits}` : digits}`
 }

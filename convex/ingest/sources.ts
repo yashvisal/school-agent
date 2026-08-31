@@ -3,6 +3,7 @@ import { v } from "convex/values"
 import type { Doc } from "../_generated/dataModel"
 import { internalMutation, internalQuery, mutation, query } from "../_generated/server"
 import { getCurrentStudent, requireStudent } from "../lib/auth"
+import { requireFetchableUrl } from "../lib/net"
 import { sourceConfigKindV, sourceHealthV } from "../lib/validators"
 
 /**
@@ -116,54 +117,12 @@ export const add = mutation({
 // ---------------------------------------------------------------------------
 
 /**
- * Hostnames the backend must never be talked into fetching. `config` is a
- * student-supplied URL that a poller later fetches *from the server*, with a
- * Canvas bearer token attached in the Canvas case, and whose response body is
- * stored in `snapshots` — i.e. a textbook SSRF lever if it is left unchecked.
+ * `config` is a student-supplied URL that a poller later fetches *from the
+ * server*, with a Canvas bearer token attached in the Canvas case, and whose
+ * response body is stored in `snapshots` — i.e. a textbook SSRF lever if left
+ * unchecked. The host rules live in `convex/lib/net.ts`, shared with the Canvas
+ * client's pagination follower (which faces the same lever via `rel="next"`).
  */
-const BLOCKED_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1", "0.0.0.0", "[::1]"])
-
-const isBlockedHost = (hostname: string): boolean => {
-  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "")
-  if (BLOCKED_HOSTNAMES.has(host)) return true
-  if (host.endsWith(".localhost") || host.endsWith(".local")) return true
-  // IPv4 literals in the private / loopback / link-local ranges.
-  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host)
-  if (v4) {
-    const [a, b] = [Number(v4[1]), Number(v4[2])]
-    if (a === 10 || a === 127 || a === 0) return true
-    if (a === 192 && b === 168) return true
-    if (a === 172 && b >= 16 && b <= 31) return true
-    if (a === 169 && b === 254) return true // link-local, incl. cloud metadata
-  }
-  // IPv6 loopback / link-local / unique-local.
-  if (host === "::" || host.startsWith("fe80:") || host.startsWith("fc") || host.startsWith("fd")) {
-    return true
-  }
-  return false
-}
-
-/** Throws `400: …` unless `raw` is an absolute, public http(s) URL. */
-function requireFetchableUrl(label: string, raw: unknown): void {
-  if (typeof raw !== "string" || raw.trim().length === 0) {
-    throw new Error(`400: ${label} must be a URL`)
-  }
-  let url: URL
-  try {
-    url = new URL(raw)
-  } catch {
-    throw new Error(`400: ${label} must be an absolute URL`)
-  }
-  if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new Error(`400: ${label} must be http(s), not ${url.protocol}`)
-  }
-  if (url.username || url.password) {
-    throw new Error(`400: ${label} must not embed credentials`)
-  }
-  if (isBlockedHost(url.hostname)) {
-    throw new Error(`400: ${label} must not point at a private or loopback host`)
-  }
-}
 
 /**
  * Per-kind shape check for `config`. The schema keeps `v.any()` because every

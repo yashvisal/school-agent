@@ -44,9 +44,20 @@ describe("ical config", () => {
       "http://169.254.169.254/latest/meta-data/", // cloud metadata
       "http://[::1]/u.ics",
       "https://printer.local/u.ics",
+      "http://2130706433/u.ics", // decimal 127.0.0.1 (URL canonicalizes it)
+      "http://0177.0.0.1/u.ics", // octal 127.0.0.1
+      "http://0x7f.0.0.1/u.ics", // hex 127.0.0.1
+      "https://100.64.0.1/u.ics", // CGNAT 100.64.0.0/10
+      "http://[::ffff:10.0.0.1]/u.ics", // IPv4-mapped IPv6, dotted
+      "http://[::ffff:7f00:1]/u.ics", // IPv4-mapped IPv6, hex = 127.0.0.1
     ]) {
       rejects("ical", { url }, /private or loopback/)
     }
+  })
+
+  test("the calendar kind uses the same url rules", () => {
+    accepts("calendar", { url: "https://feeds.example.edu/u.ics" })
+    rejects("calendar", { url: "http://127.0.0.1/u.ics" }, /private or loopback/)
   })
 
   test("embedded credentials are rejected", () => {

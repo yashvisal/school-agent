@@ -1,3 +1,4 @@
+import { requireFetchableUrl } from "../net"
 import { nextPageUrl } from "./linkHeader"
 import type {
   CanvasAssignment,
@@ -228,6 +229,23 @@ export async function fetchAll<T>(
     else out.push(body as T)
 
     url = nextPageUrl(link)
+
+    // A `rel="next"` URL comes out of the RESPONSE and is fetched with the
+    // bearer token attached — same SSRF surface as the configured base URL, so
+    // it passes the same guard (CR 3897465401). A hostile/broken link becomes
+    // an `error` health status, never a token sent to a private host.
+    if (url) {
+      try {
+        requireFetchableUrl("Canvas pagination URL", url)
+      } catch (error) {
+        throw new CanvasError(
+          `Canvas returned an unsafe pagination link for ${firstUrl}: ` +
+            (error instanceof Error ? error.message : String(error)),
+          0,
+          url
+        )
+      }
+    }
 
     // Still more pages at the cap: refuse to guess at a partial result. The
     // adapter turns this into an `error` health status the student can see,

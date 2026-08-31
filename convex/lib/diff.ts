@@ -172,21 +172,22 @@ export function diffDeadlines(
     // deletion, graded → submitted after a grade is retracted) must still emit
     // a proposal, or the stored row keeps `submissionStatus: "submitted"` and a
     // stale score, and the planner drops the work from every future plan.
+    // A score the source no longer asserts must be unset on the row, whatever
+    // the transition is called (graded → excused withdraws it just as much as
+    // graded → submitted). `null` means "unset" to the apply layer
+    // (pickDeadline in lib/changes.ts); omitting the key would keep the stale
+    // number (CR 3897465427).
+    const clearedScore =
+      before.score !== undefined && deadline.score === undefined
+        ? { score: null }
+        : {}
     const statusChanged = before.submissionStatus !== deadline.submissionStatus
     if (statusChanged && isReopening(before.submissionStatus, deadline.submissionStatus)) {
       proposals.push({
         ...base,
         kind: "deadline_updated",
         before: toDeadlineFields(before),
-        // A reopened submission must also CLEAR fields the source no longer
-        // asserts — `null` here means "unset" to the apply layer (pickDeadline
-        // in lib/changes.ts); omitting the key would leave a stale score.
-        after: {
-          ...after,
-          ...(before.score !== undefined && deadline.score === undefined
-            ? { score: null }
-            : {}),
-        },
+        after: { ...after, ...clearedScore },
         reason:
           `Submission reopened: status went from ${before.submissionStatus} ` +
           `back to ${deadline.submissionStatus}`,
@@ -217,7 +218,7 @@ export function diffDeadlines(
         ...base,
         kind: "deadline_updated",
         before: toDeadlineFields(before),
-        after,
+        after: { ...after, ...clearedScore },
         reason: `Submission status is now ${deadline.submissionStatus}`,
       })
     } else if (statusChanged || !sameNumber(before.score, deadline.score)) {
@@ -227,7 +228,7 @@ export function diffDeadlines(
         ...base,
         kind: "deadline_updated",
         before: toDeadlineFields(before),
-        after,
+        after: { ...after, ...clearedScore },
         reason: `Submission status is now ${deadline.submissionStatus}`,
       })
     }

@@ -47,7 +47,11 @@ const http = httpRouter()
 function errorToResponse(error: unknown, route: string): Response {
   const message = error instanceof Error ? error.message : String(error)
   if (/ArgumentValidationError|Validator error|ArgumentValidation/i.test(message)) {
-    return errorResponse(400, message)
+    // Same rule as the 500 branch: Convex validation messages embed the
+    // rejected value, table name, and validator shape (CR 3897465358). The
+    // caller keeps the 400-vs-500 distinction; the detail goes to the log.
+    console.error(`http ${route}: argument validation failed`, error)
+    return errorResponse(400, "invalid arguments")
   }
   const coded = codedError(error)
   if (coded) return errorResponse(coded.status, coded.message)
