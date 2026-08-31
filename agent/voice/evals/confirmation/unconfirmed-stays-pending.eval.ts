@@ -1,9 +1,6 @@
 import { defineEval } from "eve/evals"
 
-type ProposeChangeInput = {
-  confirmedInline?: boolean
-  evidence?: { quotedReply?: string; inboundMessageId?: string }
-}
+import type { ProposeChangeInput } from "../../tools/proposeChange.js"
 
 /**
  * The inline-approval safety property, negative path: the student never
