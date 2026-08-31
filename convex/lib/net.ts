@@ -46,7 +46,10 @@ export function isBlockedHost(hostname: string): boolean {
   // DNS names starting "fc"/"fd" (fcps.instructure.com, fdu.edu) would be
   // rejected with no workaround (CR 3897559085).
   if (host.includes(":")) {
-    if (host === "::" || host.startsWith("fe80:")) return true
+    if (host === "::") return true
+    // Link-local is fe80::/10 — first group fe80..febf, not only fe80:
+    // (CR 3897609702).
+    if (/^fe[89ab][0-9a-f]:/.test(host)) return true
     if (host.startsWith("fc") || host.startsWith("fd")) return true
   }
   return false

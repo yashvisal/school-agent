@@ -62,6 +62,11 @@ describe("ical config", () => {
     accepts("ical", { url: "https://fdu.edu/u.ics" })
     rejects("ical", { url: "http://[fd12:3456::1]/u.ics" }, /private or loopback/)
     rejects("ical", { url: "http://[fe80::1]/u.ics" }, /private or loopback/)
+    // Link-local is fe80::/10, not just the fe80: prefix.
+    rejects("ical", { url: "http://[fe90::1]/u.ics" }, /private or loopback/)
+    rejects("ical", { url: "http://[febf::1]/u.ics" }, /private or loopback/)
+    // A global-unicast literal outside every blocked range stays allowed.
+    accepts("ical", { url: "http://[2001:db8::1]/u.ics" })
   })
 
   test("the calendar kind uses the same url rules", () => {
