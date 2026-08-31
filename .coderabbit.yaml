@@ -13,8 +13,13 @@ reviews:
         Check validators and indexes per convex/_generated/ai/guidelines.md.
     - path: "agent/voice/**"
       instructions: >
-        Voice may only touch Core through getFeasibleActions, proposeChange, recordSignal.
-        Flag any other write path, any planning logic in eve-specific APIs, and any tone
+        Voice sees the plan only via getFeasibleActions, mutates state only via
+        proposeChange, and records learning only via recordSignal (the model's three
+        tools). Two bookkeeping routes are also sanctioned by the plan and are NOT
+        violations: /voice/logUsage (vision §10 cost posture — every LLM call writes a
+        Core usage row) and /voice/recordInbound (VOICE_TOOLS.md §7b — channel-level
+        webhook dedupe/warming, called before dispatch, never by the model). Flag any
+        OTHER Core path, any planning logic in eve-specific APIs, and any tone
         regression against agent/voice/instructions.md.
     - path: "agent/workspace/**"
       instructions: >
