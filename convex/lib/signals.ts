@@ -32,14 +32,15 @@ export type RecordSignalInput = {
   provenance?: Infer<typeof provenanceV>
 }
 
-/** Confidence recorded when the caller did not say how sure it was. */
-export const DEFAULT_SIGNAL_CONFIDENCE = 0.6
-
-/** A confidence is a probability or it is not a confidence. */
-export function normalizeConfidence(value: number | undefined): number {
+/**
+ * A confidence is a probability or it is not a confidence — and it is a SOURCE
+ * fact: when the caller did not assert one, none is stored (absent, never a
+ * fabricated default that reads like a measurement).
+ */
+export function normalizeConfidence(value: number | undefined): number | undefined {
   return value !== undefined && Number.isFinite(value) && value >= 0 && value <= 1
     ? value
-    : DEFAULT_SIGNAL_CONFIDENCE
+    : undefined
 }
 
 export async function recordSignalInternal(
@@ -66,7 +67,6 @@ export async function recordSignalInternal(
     provenance: input.provenance ?? {
       source: input.origin === "chat" ? "chat" : "manual",
       sourceRef: input.origin,
-      confidence: DEFAULT_SIGNAL_CONFIDENCE,
     },
   })
 }

@@ -65,7 +65,7 @@ Every fetch is stored as an immutable snapshot. `diff(prevNormalized, nextNormal
 
 The pending queue must never become a chore inbox. Rules:
 
-1. **Inline chat confirmation is a first-class approval channel**, equal to a web tap. A change born in chat is confirmed in chat in the same exchange ("got it — midterm now Friday, right?" → "yeah" → `approved`, applied). It does *not* also wait in the web queue.
+1. **Inline chat confirmation is a first-class approval channel**, equal to a web tap. A change born in chat is confirmed in chat in the same exchange ("got it — midterm now Friday, right?" → "yeah" → `approved`, applied). It does *not* also wait in the web queue. Every inline confirmation carries **evidence** — the student's confirming reply quoted verbatim (plus the message id when available), stored on the change and shown in the feed ("confirmed in chat: 'yeah'"). Accountability, not proof: the claim is visible and contestable; verifying the message id against the inbound log comes with webhook dedupe.
 2. **The web queue holds only what chat could not confirm in-flow:** bulk syllabus/site parses at onboarding (bulk approve UI), schedule-upload parses, and source conflicts.
 3. **The planner plans on applied facts only.** Any option touched by a pending change is *annotated* (`pending: due date may move to Fri`) so the LLM can see and mention it — never silently planned on, never silently ignored.
 4. **Chat drains the queue proactively:** when a pending change enters the planning horizon (would affect the next plan), the nightly pass surfaces it for a one-word confirmation in the morning text. Nothing rots because the student didn't open the Dashboard.

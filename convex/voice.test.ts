@@ -364,6 +364,7 @@ describe("proposeChange", () => {
         entity: { table: "deadlines" },
         after: { title: "Midterm", kind: "exam", dueAt: at("2026-09-25", 12 * 60) },
         confirmedInline: true,
+      evidence: { quotedReply: "yeah" },
       },
     })
 
@@ -455,6 +456,7 @@ describe("proposeChange", () => {
           provenance: { source: "canvas", sourceRef: "assignments/9999", confidence: 1 },
         },
         confirmedInline: true,
+      evidence: { quotedReply: "yeah" },
       },
     })
     expect(result.tier).toBe("needs_approval")
@@ -525,12 +527,13 @@ describe("recordSignal", () => {
     const signal = await t.run(async (ctx) => ctx.db.get("studentSignals", signalId))
     expect(signal?.provenance.source).toBe("chat")
     expect(signal?.provenance.sourceRef).toBe("voice")
-    expect(signal?.provenance.confidence).toBe(0.6)
+    // No asserted confidence -> none stored (absent, not a fabricated 0.6).
+    expect(signal?.provenance.confidence).toBeUndefined()
     expect(signal?.refs).toEqual({})
     expect(signal?.observedAt).toBeGreaterThanOrEqual(before)
   })
 
-  test("an out-of-range confidence falls back rather than being stored", async () => {
+  test("an out-of-range confidence is dropped rather than stored", async () => {
     const t = setupTest()
     const seeded = await seed(t)
     const signalId = await t.mutation(internal.voice.recordSignal, {
@@ -538,7 +541,7 @@ describe("recordSignal", () => {
       signal: { kind: "other", text: "note", confidence: 42 },
     })
     const signal = await t.run(async (ctx) => ctx.db.get("studentSignals", signalId))
-    expect(signal?.provenance.confidence).toBe(0.6)
+    expect(signal?.provenance.confidence).toBeUndefined()
   })
 
   test("empty text is rejected — a signal with no content is not a signal", async () => {

@@ -34,9 +34,24 @@ export const originV = sourceKindV
 export const provenanceV = v.object({
   source: sourceKindV,
   sourceRef: v.string(),
-  /** 0..1. Structured sources are 1; LLM extraction carries the model's confidence. */
-  confidence: v.number(),
+  /**
+   * 0..1 — a SOURCE fact, never invented: structured sources are 1, LLM
+   * extraction carries the model's own number, and where neither exists the
+   * field is ABSENT. Downstream must treat "absent" as "unknown", not as 0.
+   */
+  confidence: v.optional(v.number()),
   snapshotId: v.optional(v.id("snapshots")),
+})
+
+/**
+ * What the student actually said when a change was confirmed inline in chat
+ * (Approval channels rule 1). Accountability, not proof — see lib/changes.ts.
+ */
+export const inlineEvidenceV = v.object({
+  /** The confirming reply, quoted verbatim ("yeah", "yes friday works"). */
+  quotedReply: v.string(),
+  /** Photon message id of that reply, when the channel supplied one. */
+  inboundMessageId: v.optional(v.string()),
 })
 
 /** A block on the weekly grid. 0 = Sunday. Minutes from local midnight. */
@@ -303,6 +318,8 @@ export const changeFields = {
   createdAt: v.number(),
   resolvedAt: v.optional(v.number()),
   resolvedVia: v.optional(resolvedViaV),
+  /** Present iff the change was approved via `confirmedInline`. */
+  evidence: v.optional(inlineEvidenceV),
 }
 
 export const sourceFields = {

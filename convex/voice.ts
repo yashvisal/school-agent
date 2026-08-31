@@ -10,6 +10,7 @@ import {
   changeEntityV,
   changeKindV,
   changeStatusV,
+  inlineEvidenceV,
   planV,
   signalKindV,
   surfaceV,
@@ -160,6 +161,12 @@ export const voiceChangeV = v.object({
    * does NOT also wait in the web queue.
    */
   confirmedInline: v.optional(v.boolean()),
+  /**
+   * REQUIRED with `confirmedInline`. Accountability, not proof: the quoted
+   * reply is shown in the change feed ("confirmed in chat: 'yeah'") so a
+   * claimed approval is visible and contestable (VOICE_TOOLS.md §4).
+   */
+  evidence: v.optional(inlineEvidenceV),
 })
 
 /**
@@ -198,6 +205,7 @@ export const proposeChange = internalMutation({
       reason: args.change.reason,
       conflict: args.change.conflict,
       confirmedInline: args.change.confirmedInline,
+      evidence: args.change.evidence,
     })
     return { changeId, status, tier: tierFor(VOICE_ORIGIN, args.change.conflict) }
   },
@@ -237,7 +245,10 @@ export const recordSignal = internalMutation({
       provenance: {
         source: "chat",
         sourceRef: args.signal.sessionId ?? "voice",
-        confidence: normalizeConfidence(args.signal.confidence),
+        // Absent when Voice did not assert one — never a fabricated default.
+        ...(normalizeConfidence(args.signal.confidence) !== undefined
+          ? { confidence: normalizeConfidence(args.signal.confidence) }
+          : {}),
       },
     }),
 })

@@ -266,7 +266,8 @@ there; you never write a deadline, task, or course directly.
     "courseId": "n03d...",
     "reason": "student said the midterm moved to Friday",
     "conflict": false,
-    "confirmedInline": true
+    "confirmedInline": true,
+    "evidence": { "quotedReply": "yeah", "inboundMessageId": "msg_2f9c..." }
   }
 }
 ```
@@ -281,6 +282,7 @@ there; you never write a deadline, task, or course directly.
 | `reason` | no | Free text, shown in the change feed. Worth filling in. |
 | `conflict` | no | Set `true` when what the student said contradicts a structured source. |
 | `confirmedInline` | no | See below. |
+| `evidence` | with `confirmedInline` | `{ quotedReply: string, inboundMessageId?: string }`. See below. |
 
 **There is no `origin` field.** Everything Voice proposes is `chat` origin by
 construction — it was interpreted from a message, and the route will reject a
@@ -288,9 +290,11 @@ payload that tries to say otherwise. Two consequences worth knowing:
 
 - **A Voice change is never `tier: "auto"`.** It is `needs_approval`, always,
   and reaches student state only through `confirmedInline` or a web tap.
-- **You cannot set `after.provenance`.** Whatever you put there is replaced with
-  `{ source: "chat", sourceRef: <changeId>, confidence: 0.5 }` on apply, so a
-  fact you heard can never be recorded as a fact Canvas stated.
+- **You cannot set `after.provenance`.** The source claim is replaced with
+  `{ source: "chat", sourceRef: <changeId> }` on apply, so a fact you heard can
+  never be recorded as a fact Canvas stated. The one thing you may assert is a
+  numeric `confidence` in `[0, 1]` — your own extraction confidence; when you
+  don't, the field is simply absent (never a fabricated default).
 
 **Scope on `entity.table: "students"`:** a chat-origin change may write only
 `classBlocks`, `availability`, `semesterStart`, `semesterEnd`, and
@@ -326,6 +330,17 @@ Set it **only** when the student actually confirmed in that same exchange:
 
 Do not set it because a statement sounded confident. An unconfirmed inference is
 `pending`; that is the whole safety property.
+
+**Evidence is required.** `confirmedInline: true` without `evidence.quotedReply`
+is a `400` and nothing lands. Quote the student's confirming reply *verbatim*
+("yeah", "yes friday works") and pass the Photon message id of that reply as
+`inboundMessageId` when you have it. This is **accountability, not proof**: Core
+cannot yet verify the quote, but it is stored on the change and shown in the
+Dashboard feed as `confirmed in chat: "yeah"`, so a claimed approval is always
+visible and contestable by the student. The upgrade path — verifying
+`inboundMessageId` against the stored inbound message log — lands with webhook
+dedupe (the "Needs from Core" list); write real ids now so old approvals become
+verifiable retroactively.
 
 A `conflict: true` change is never auto-applied. (Nothing from Voice ever is;
 `conflict` matters for the adapters, and marking it tells the feed *why* the

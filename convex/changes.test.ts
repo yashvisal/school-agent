@@ -2,7 +2,6 @@ import { describe, expect, test } from "vitest"
 
 import { api, internal } from "./_generated/api"
 import type { Id } from "./_generated/dataModel"
-import { INTERPRETED_FALLBACK_CONFIDENCE } from "./lib/changes"
 import { CLERK_ID, setupTest } from "./test.setup"
 
 /**
@@ -149,10 +148,10 @@ describe("needs_approval lifecycle", () => {
 
     const pending = await t
       .withIdentity({ subject: CLERK_ID })
-      .query(api.changes.listPending, { studentId })
-    expect(pending).toHaveLength(1)
-    expect(pending[0].tier).toBe("needs_approval")
-    expect(pending[0].resolvedVia).toBeUndefined()
+      .query(api.changes.listPending, { studentId, paginationOpts: { numItems: 200, cursor: null } })
+    expect(pending.page).toHaveLength(1)
+    expect(pending.page[0].tier).toBe("needs_approval")
+    expect(pending.page[0].resolvedVia).toBeUndefined()
   })
 
   test("approve applies the held change", async () => {
@@ -183,7 +182,9 @@ describe("needs_approval lifecycle", () => {
     expect(deadlines[0].title).toBe("Midterm")
 
     // The queue is drained.
-    expect(await as.query(api.changes.listPending, { studentId })).toHaveLength(0)
+    expect(
+      (await as.query(api.changes.listPending, { studentId, paginationOpts: { numItems: 200, cursor: null } })).page
+    ).toHaveLength(0)
   })
 
   test("reject resolves without applying", async () => {
@@ -222,6 +223,7 @@ describe("needs_approval lifecycle", () => {
       after: deadlineAfter(courseId, { title: "Midterm", kind: "exam" }),
       origin: "chat",
       confirmedInline: true,
+      evidence: { quotedReply: "yeah" },
     })
 
     expect(result.status).toBe("approved")
@@ -234,8 +236,8 @@ describe("needs_approval lifecycle", () => {
     // It does NOT also wait in the web queue.
     const pending = await t
       .withIdentity({ subject: CLERK_ID })
-      .query(api.changes.listPending, { studentId })
-    expect(pending).toHaveLength(0)
+      .query(api.changes.listPending, { studentId, paginationOpts: { numItems: 200, cursor: null } })
+    expect(pending.page).toHaveLength(0)
   })
 })
 
@@ -361,6 +363,142 @@ describe("expireStale", () => {
   })
 })
 
+describe("inline confirmation evidence", () => {
+  test("confirmedInline without evidence is rejected, nothing lands", async () => {
+    const t = setupTest()
+    const { studentId, courseId } = await seed(t)
+
+    await expect(
+      t.mutation(internal.changes.propose, {
+        studentId,
+        courseId,
+        kind: "deadline_added",
+        entity: { table: "deadlines" },
+        after: deadlineAfter(courseId, { title: "Claimed approval" }),
+        origin: "chat",
+        confirmedInline: true,
+      })
+    ).rejects.toThrow(/400: confirmedInline requires evidence/)
+
+    // A whitespace-only quote is no quote.
+    await expect(
+      t.mutation(internal.changes.propose, {
+        studentId,
+        courseId,
+        kind: "deadline_added",
+        entity: { table: "deadlines" },
+        after: deadlineAfter(courseId, { title: "Claimed approval" }),
+        origin: "chat",
+        confirmedInline: true,
+        evidence: { quotedReply: "   " },
+      })
+    ).rejects.toThrow(/400: confirmedInline requires evidence/)
+
+    expect(await countDeadlines(t)).toBe(0)
+    const changes = await t.run(async (ctx) => ctx.db.query("changes").take(10))
+    expect(changes).toHaveLength(0)
+  })
+
+  test("the quoted reply is stored and visible in the feed", async () => {
+    const t = setupTest()
+    const { studentId, courseId } = await seed(t)
+
+    await t.mutation(internal.changes.propose, {
+      studentId,
+      courseId,
+      kind: "deadline_added",
+      entity: { table: "deadlines" },
+      after: deadlineAfter(courseId, { title: "Midterm moved" }),
+      origin: "chat",
+      confirmedInline: true,
+      evidence: { quotedReply: "yeah", inboundMessageId: "msg_42" },
+    })
+
+    const feed = await t
+      .withIdentity({ subject: CLERK_ID })
+      .query(api.changes.listRecent, { studentId })
+    // The Dashboard can render: confirmed in chat: "yeah".
+    expect(feed[0].evidence).toEqual({ quotedReply: "yeah", inboundMessageId: "msg_42" })
+    expect(feed[0].resolvedVia).toBe("chat")
+  })
+
+  test("a change without inline confirmation carries no evidence", async () => {
+    const t = setupTest()
+    const { studentId, courseId } = await seed(t)
+
+    await t.mutation(internal.changes.propose, {
+      studentId,
+      courseId,
+      kind: "deadline_added",
+      entity: { table: "deadlines" },
+      after: deadlineAfter(courseId, { title: "Pending guess" }),
+      origin: "syllabus",
+      // Evidence supplied without confirmedInline is dropped, not stored.
+      evidence: { quotedReply: "not actually a confirmation" },
+    })
+
+    const changes = await t.run(async (ctx) => ctx.db.query("changes").take(10))
+    expect(changes[0].status).toBe("pending")
+    expect(changes[0].evidence).toBeUndefined()
+  })
+})
+
+describe("expireStale reaches past the front window", () => {
+  test("stale rows behind a full window of fresh ones are still expired", async () => {
+    const t = setupTest()
+    const { studentId, courseId } = await seed(t)
+    const horizonMs = 7 * 24 * 60 * 60 * 1000
+
+    // 210 fresh pending rows FIRST (they occupy the front of the index by
+    // _creationTime), then 30 stale ones behind them — the exact shape the old
+    // fixed take(200) window could never reach (CR 3892156162).
+    await t.run(async (ctx) => {
+      const base = {
+        studentId,
+        courseId,
+        kind: "deadline_added" as const,
+        entity: { table: "deadlines" as const },
+        after: {},
+        origin: "syllabus" as const,
+        tier: "needs_approval" as const,
+        status: "pending" as const,
+        snapshotIds: [],
+      }
+      for (let i = 0; i < 210; i++) {
+        await ctx.db.insert("changes", { ...base, createdAt: Date.now() })
+      }
+      for (let i = 0; i < 30; i++) {
+        await ctx.db.insert("changes", {
+          ...base,
+          createdAt: Date.now() - horizonMs - 60_000,
+        })
+      }
+    })
+
+    const expired = await t.mutation(internal.changes.expireStale, {
+      studentId,
+      olderThanMs: horizonMs,
+    })
+    expect(expired).toBe(30)
+
+    // The fresh ones are untouched and fully listable through pagination.
+    let cursor: string | null = null
+    let seen = 0
+    for (;;) {
+      const page: { page: unknown[]; isDone: boolean; continueCursor: string } = await t
+        .withIdentity({ subject: CLERK_ID })
+        .query(api.changes.listPending, {
+          studentId,
+          paginationOpts: { numItems: 100, cursor },
+        })
+      seen += page.page.length
+      if (page.isDone) break
+      cursor = page.continueCursor
+    }
+    expect(seen).toBe(210)
+  })
+})
+
 describe("tenancy — a change may only ever touch its own student", () => {
   /** A second student with their own course and deadline. */
   async function seedOther(t: ReturnType<typeof setupTest>) {
@@ -453,6 +591,7 @@ describe("tenancy — a change may only ever touch its own student", () => {
         after: { nightlyHourLocal: 23 },
         origin: "chat",
         confirmedInline: true,
+      evidence: { quotedReply: "yeah" },
       })
     ).rejects.toThrow(/403/)
 
@@ -481,6 +620,7 @@ describe("tenancy — a change may only ever touch its own student", () => {
       },
       origin: "chat",
       confirmedInline: true,
+      evidence: { quotedReply: "yeah" },
     })
 
     const student = await t.run((ctx) => ctx.db.get("students", studentId))
@@ -504,6 +644,7 @@ describe("tenancy — a change may only ever touch its own student", () => {
       after: { phone: "(555) 123-4567" },
       origin: "manual",
       confirmedInline: true,
+      evidence: { quotedReply: "yeah" },
     })
 
     const student = await t.run((ctx) => ctx.db.get("students", studentId))
@@ -529,14 +670,16 @@ describe("provenance", () => {
       }),
       origin: "chat",
       confirmedInline: true,
+      evidence: { quotedReply: "yeah" },
     })
 
     const deadlines = await t.run(async (ctx) => ctx.db.query("deadlines").take(10))
+    // No source asserted a confidence, so none is stored — absent, not 0.5.
     expect(deadlines[0].provenance).toEqual({
       source: "chat",
       sourceRef: changeId,
-      confidence: INTERPRETED_FALLBACK_CONFIDENCE,
     })
+    expect(deadlines[0].provenance.confidence).toBeUndefined()
   })
 
   test("a chat change may supply a real confidence, but never a source", async () => {
@@ -556,6 +699,7 @@ describe("provenance", () => {
       }),
       origin: "chat",
       confirmedInline: true,
+      evidence: { quotedReply: "yeah" },
     })
 
     const deadlines = await t.run(async (ctx) => ctx.db.query("deadlines").take(10))
@@ -679,14 +823,14 @@ describe("authorization", () => {
 
     const stranger = t.withIdentity({ subject: "user_test_stranger" })
     await expect(
-      stranger.query(api.changes.listPending, { studentId })
+      stranger.query(api.changes.listPending, { studentId, paginationOpts: { numItems: 200, cursor: null } })
     ).rejects.toThrow(/403/)
     await expect(
       stranger.mutation(api.changes.approve, { changeId, via: "web" })
     ).rejects.toThrow(/403/)
 
     // Signed out is a 401, not a silent read.
-    await expect(t.query(api.changes.listPending, { studentId })).rejects.toThrow(
+    await expect(t.query(api.changes.listPending, { studentId, paginationOpts: { numItems: 200, cursor: null } })).rejects.toThrow(
       /401/
     )
   })

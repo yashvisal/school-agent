@@ -341,6 +341,7 @@ describe("proposeChange", () => {
         entity: { table: "deadlines" },
         after: { title: "Midterm", kind: "exam" },
         confirmedInline: true,
+        evidence: { quotedReply: "yeah friday works", inboundMessageId: "msg_123" },
       },
     })
 
@@ -350,6 +351,32 @@ describe("proposeChange", () => {
 
     const deadlines = await t.run(async (ctx) => ctx.db.query("deadlines").take(10))
     expect(deadlines).toHaveLength(1)
+
+    // The evidence rides on the change row for the Dashboard feed.
+    const changes = await t.run(async (ctx) => ctx.db.query("changes").take(10))
+    expect(changes[0].evidence).toEqual({
+      quotedReply: "yeah friday works",
+      inboundMessageId: "msg_123",
+    })
+  })
+
+  test("an inline confirmation WITHOUT evidence is a 400", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    const response = await post(t, "/voice/proposeChange", {
+      studentId: seeded.studentId,
+      change: {
+        courseId: seeded.courseId,
+        kind: "deadline_added",
+        entity: { table: "deadlines" },
+        after: { title: "Midterm", kind: "exam" },
+        confirmedInline: true,
+      },
+    })
+    expect(response.status).toBe(400)
+    // Nothing landed: no approval without the student's quoted words.
+    const deadlines = await t.run(async (ctx) => ctx.db.query("deadlines").take(10))
+    expect(deadlines).toHaveLength(0)
   })
 
   test("a change that is not an object is a 400", async () => {

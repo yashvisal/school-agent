@@ -45,6 +45,8 @@ export type ProposeChangeInput = {
   conflict?: boolean
   /** The student confirmed this in the same chat exchange it was born in. */
   confirmedInline?: boolean
+  /** REQUIRED with `confirmedInline`: what the student actually said. */
+  evidence?: { quotedReply: string; inboundMessageId?: string }
 }
 
 export type ProposeChangeResult = {
@@ -76,6 +78,18 @@ export async function proposeChangeInternal(
   const now = Date.now()
   const tier = tierFor(input.origin, input.conflict)
 
+  // `confirmedInline` rests on the model's honesty; the evidence requirement is
+  // ACCOUNTABILITY, not proof — the quoted reply lands in the change feed so a
+  // student can see exactly what "approval" the agent claims ("confirmed in
+  // chat: 'yeah'") and contest a fabricated one. Verifying `inboundMessageId`
+  // against the stored inbound log is the upgrade path once webhook dedupe
+  // lands (VOICE_TOOLS.md §4).
+  if (input.confirmedInline && !input.evidence?.quotedReply?.trim()) {
+    throw new Error(
+      "400: confirmedInline requires evidence.quotedReply — the student's confirming reply, quoted verbatim"
+    )
+  }
+
   let status: ChangeStatus
   let resolvedVia: ResolvedVia | undefined
   if (tier === "auto") {
@@ -105,6 +119,7 @@ export async function proposeChangeInternal(
     createdAt: now,
     resolvedAt: status === "pending" ? undefined : now,
     resolvedVia,
+    evidence: input.confirmedInline ? input.evidence : undefined,
   })
 
   if (status !== "pending") {
@@ -160,12 +175,12 @@ export async function rejectChangeInternal(
  * Rule 5: pending changes older than the horizon are dropped with a note in the
  * feed — expired, never applied.
  *
- * Drains in bounded batches until a pass finds nothing left to expire, rather
- * than in one fixed 200-row window: the pending set has no upper bound, and a
- * single window silently leaves everything past it un-expirable (CR 3892156162).
- * Each expiry removes a row from the `pending` half of the index, so the loop
- * terminates; `MAX_EXPIRE_BATCHES` is a transaction-budget backstop, and the
- * nightly pass picks up any remainder on its next run.
+ * Drains with a real cursor over `_creationTime` (the implicit last field of
+ * every index), not a fixed front window: a `take(200)` loop re-reads the same
+ * front of the index each pass, so stale rows sitting behind 200 fresh ones
+ * were unreachable (CR 3892156162). The cursor walks the entire pending set;
+ * `MAX_EXPIRE_BATCHES` is a transaction-budget backstop, and the nightly pass
+ * picks up any remainder on its next run.
  */
 const EXPIRE_BATCH = 200
 const MAX_EXPIRE_BATCHES = 20
@@ -178,16 +193,20 @@ export async function expireStaleInternal(
 ): Promise<number> {
   const cutoff = Date.now() - olderThanMs
   let expired = 0
+  let cursor: number | undefined
 
   for (let batch = 0; batch < MAX_EXPIRE_BATCHES; batch++) {
+    const after = cursor
     const pending = await ctx.db
       .query("changes")
-      .withIndex("by_student_status", (q) =>
-        q.eq("studentId", studentId).eq("status", "pending")
-      )
+      .withIndex("by_student_status", (q) => {
+        const base = q.eq("studentId", studentId).eq("status", "pending")
+        return after === undefined ? base : base.gt("_creationTime", after)
+      })
       .take(batchSize)
+    if (pending.length === 0) break
+    cursor = pending[pending.length - 1]._creationTime
 
-    let expiredThisBatch = 0
     for (const change of pending) {
       if (change.createdAt >= cutoff) continue
       await ctx.db.patch("changes", change._id, {
@@ -195,12 +214,9 @@ export async function expireStaleInternal(
         resolvedAt: Date.now(),
         resolvedVia: "expired",
       })
-      expiredThisBatch++
+      expired++
     }
-    expired += expiredThisBatch
-
-    // Nothing stale in this window, or the window was not even full: done.
-    if (expiredThisBatch === 0 || pending.length < batchSize) break
+    if (pending.length < batchSize) break
   }
   return expired
 }
@@ -326,16 +342,6 @@ const CHAT_STUDENT_KEYS = [
 ] as const
 
 /**
- * The confidence recorded for a fact that arrived without provenance of its own.
- *
- * This is a *labelled default*, not a measured one: it says "nobody told us how
- * sure to be", which is materially different from an extractor that reported
- * 0.5. Structured sources carry 1; an LLM extraction should pass its own number
- * through in `after.provenance` rather than fall back to this.
- */
-export const INTERPRETED_FALLBACK_CONFIDENCE = 0.5
-
-/**
  * Origins that assert nothing: whatever provenance the caller attached is
  * overwritten on apply. Voice interpreting a message cannot claim the fact came
  * from Canvas (CR 3892156302) — the two-tier rule keys off exactly that claim.
@@ -350,7 +356,10 @@ function fallbackProvenance(change: Doc<"changes">) {
     // `reason` is student-facing prose, not a source reference (CR 3892156165).
     source: change.origin,
     sourceRef: change._id,
-    confidence: change.tier === "auto" ? 1 : INTERPRETED_FALLBACK_CONFIDENCE,
+    // Confidence is a SOURCE fact: structured sources assert 1; an extraction
+    // passes its own number through `after.provenance`. Where neither exists it
+    // is ABSENT — never fabricated (a made-up 0.5 reads like a measurement).
+    ...(change.tier === "auto" ? { confidence: 1 } : {}),
     snapshotId: change.snapshotIds[0],
   }
 }
