@@ -1,5 +1,5 @@
 # dependencies
-/node_modules
+node_modules/
 /.pnp
 .pnp.*
 .yarn/*
@@ -41,3 +41,13 @@ next-env.d.ts
 !.env.example
 
 .vercel
+
+# eve build/discovery artifacts
+.eve/
+.output/
+
+# Spike A scratch (jsonl logs, generated attachments)
+agent/voice/.spike/
+
+# local dev/tunnel logs (spike)
+/.logs/
