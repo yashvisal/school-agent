@@ -383,6 +383,19 @@ function fallbackProvenance(change: Doc<"changes">) {
 }
 
 /**
+ * For a PATCH from a caller-asserted origin (chat, manual), the row's
+ * provenance must move with the fact: leaving the old Canvas provenance on a
+ * due date the student changed in chat shows "Canvas, confidence 1" for a
+ * chat-asserted value — exactly the misattribution the §4 rule forbids. Found
+ * live (the insert paths already did this via `provenanceFor`); adapters keep
+ * their own behaviour, since they always supply real provenance in `after`.
+ */
+function withAssertedProvenance(change: Doc<"changes">, after: Bag, patch: Bag): Bag {
+  if (!CALLER_ASSERTED_ORIGINS.has(change.origin)) return patch
+  return { ...patch, provenance: provenanceFor(change, after) }
+}
+
+/**
  * The provenance to write for this change's entity. A caller-supplied
  * `after.provenance` is honoured only for origins that can actually evidence it;
  * for `chat` and `manual` it is replaced with what we know to be true.
@@ -541,7 +554,11 @@ export async function applyChange(
       if (!id) return undefined
       const doc = await loadOwned(ctx, "deadlines", id, change.studentId)
       if (!doc) return undefined
-      await ctx.db.patch("deadlines", id, pickDeadline(after))
+      await ctx.db.patch(
+        "deadlines",
+        id,
+        withAssertedProvenance(change, after, pickDeadline(after))
+      )
       return id
     }
 
@@ -601,7 +618,11 @@ export async function applyChange(
       if (!id) return undefined
       const doc = await loadOwned(ctx, "courses", id, change.studentId)
       if (!doc) return undefined
-      await ctx.db.patch("courses", id, pick(after, COURSE_KEYS))
+      await ctx.db.patch(
+        "courses",
+        id,
+        withAssertedProvenance(change, after, pick(after, COURSE_KEYS))
+      )
       return id
     }
 
@@ -665,13 +686,21 @@ export async function applyChange(
         case "deadlines": {
           const id = change.entity.id as Id<"deadlines">
           if (!(await loadOwned(ctx, "deadlines", id, change.studentId))) return undefined
-          await ctx.db.patch("deadlines", id, pickDeadline(after))
+          await ctx.db.patch(
+            "deadlines",
+            id,
+            withAssertedProvenance(change, after, pickDeadline(after))
+          )
           return id
         }
         case "courses": {
           const id = change.entity.id as Id<"courses">
           if (!(await loadOwned(ctx, "courses", id, change.studentId))) return undefined
-          await ctx.db.patch("courses", id, pick(after, COURSE_KEYS))
+          await ctx.db.patch(
+            "courses",
+            id,
+            withAssertedProvenance(change, after, pick(after, COURSE_KEYS))
+          )
           return id
         }
         case "tasks": {

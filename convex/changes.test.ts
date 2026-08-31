@@ -491,6 +491,48 @@ describe("inline confirmation evidence", () => {
     ).rejects.toThrow(/400: evidence.inboundMessageId does not match/)
   })
 
+  test("a chat-origin patch moves the row's provenance to chat", async () => {
+    const t = setupTest()
+    const { studentId, courseId } = await seed(t)
+
+    // A Canvas-applied deadline...
+    const added = await t.mutation(internal.changes.propose, {
+      studentId,
+      courseId,
+      kind: "deadline_added",
+      entity: { table: "deadlines" },
+      after: deadlineAfter(courseId),
+      origin: "canvas",
+    })
+    const deadlineId = await t.run(
+      async (ctx) => (await ctx.db.get("changes", added.changeId))?.entity.id
+    )
+
+    // ...moved in chat: the fact now comes from the thread, and its provenance
+    // must say so — leaving "Canvas, confidence 1" on a chat-asserted value is
+    // exactly the misattribution the §4 rule forbids. Even a smuggled
+    // after.provenance claiming canvas is replaced.
+    const moved = await t.mutation(internal.changes.propose, {
+      studentId,
+      kind: "deadline_moved",
+      entity: { table: "deadlines", id: deadlineId },
+      after: {
+        dueAt: Date.UTC(2026, 8, 16, 3, 59),
+        provenance: { source: "canvas", sourceRef: "assignments/5001", confidence: 1 },
+      },
+      origin: "chat",
+      confirmedInline: true,
+      evidence: { quotedReply: "yeah" },
+    })
+
+    const deadline = await t.run(async (ctx) =>
+      ctx.db.get("deadlines", deadlineId as Id<"deadlines">)
+    )
+    expect(deadline?.dueAt).toBe(Date.UTC(2026, 8, 16, 3, 59))
+    expect(deadline?.provenance.source).toBe("chat")
+    expect(deadline?.provenance.sourceRef).toBe(moved.changeId)
+  })
+
   test("a quoted reply with no message id remains accountability-only, and lands", async () => {
     const t = setupTest()
     const { studentId, courseId } = await seed(t)
