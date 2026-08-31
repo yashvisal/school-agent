@@ -207,3 +207,34 @@ so `--mode=agent` has not been executed end to end. That gap is about the
 - Usage for a cost rail is on `step.completed`
   (`data.usage.{inputTokens,outputTokens,cacheReadTokens,cacheWriteTokens,costUsd}`);
   the model id is on the preceding `step.started` (`data.modelId`).
+
+---
+
+## Face glue (Spike B #2) — **live-verified**
+
+- **Reducer:** `lib/eve/reduce.ts`. Pure `EveMessage[] → RailItem[]`, no React,
+  no DOM. `reasoning` → thinking row, `text` → streaming prose, `dynamic-tool`
+  → tool chips labelled as Core actions ("listed workspace", "proposed
+  change"), a gated `propose_change` in `approval-requested` → approval card +
+  diff table, `output-available` → a collapsed "change proposed — pending in
+  Core" row. `input-streaming` shows a "preparing…" chip and never parses the
+  partial `inputText`. Every message is scanned, so an approval stays
+  discoverable while later turns append messages.
+- **Rail:** `components/workspace/chat-rail.tsx` — `useEveAgent({ agent:
+  "workspace" })`, composer with `turnPolicy: "steer"` while a turn is live,
+  Approve/Reject → `respond([{ requestId, optionId }])`, and the failure text
+  shown verbatim instead of a spinner. Option ids are eve's own `approve` /
+  `cancel`; only the *label* for `cancel` is rewritten to "Reject".
+- **Live pass** (`anthropic/claude-haiku-4.5`, real Clerk session, dev server on
+  3003): typed a prompt in the rail → `propose_change` streamed in → approval
+  card rendered with the `Oct 9 → Oct 12` diff and the model's one-line reason →
+  Approve → `output-available` collapsed row. `scripts/spike-b-isolation.mts
+  --mode=agent` also passed the two HITL checks (`A3 propose_change parked for
+  human approval`, `A4 approved propose_change returns the pending change
+  envelope`) for `$0.006644` of gateway spend.
+- **Model-free path is kept on purpose.** `lib/eve/fixtures.ts` holds frames of
+  a real turn typed against eve's `EveMessage`, so a projection change on
+  upgrade breaks `pnpm typecheck` first. `node scripts/spike-b-stream-check.mts`
+  asserts the reducer output frame by frame (36/36), and `?replay=1` on a course
+  page (dev only) feeds the same frames through the same renderers — the rail is
+  demoable with the gateway down, at $0.
