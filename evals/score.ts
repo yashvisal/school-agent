@@ -96,55 +96,106 @@ export type FixtureScore = {
 type Item = { title: string; dueAt?: number }
 
 /**
- * Greedy best-first pairing. Greedy rather than optimal because the alternative
- * MAXIMUM-CARDINALITY matching, not greedy best-edge-first: with expected
+ * Optimal assignment, not greedy best-edge-first: with expected
  * ["Exam", "Final Exam"] and actual ["Final Exam", "Final"], greedy takes the
  * exact "Final Exam" pair and strands "Exam", failing a correct extraction at
- * F1 0.50 (CR 3898824612). Kuhn's augmenting paths over the eligible edges
- * maximizes the number of matched pairs; each vertex's candidate list is
- * ordered by similarity, so similarity remains the tie-break among maximum
- * matchings.
+ * F1 0.50 (CR 3898824612). And maximum cardinality alone is not enough: among
+ * equal-size matchings the one with the higher total similarity must win, or a
+ * cross-eligible pair can be matched the wrong way round and then compared
+ * against the wrong `dueAt` (CR 3898882490).
+ *
+ * Hungarian (Kuhn–Munkres) on a square matrix with weight = CARDINALITY_WEIGHT
+ * + similarity for eligible edges and 0 otherwise: the large constant makes
+ * "one more pair" always outweigh any similarity difference, so cardinality is
+ * the primary objective and total similarity the secondary. Sets are tens of
+ * items, so O(n³) is free.
  */
-function pair(
+const CARDINALITY_WEIGHT = 1_000
+
+export function pair(
   expected: Item[],
   actual: Item[]
 ): { pairs: [Item, Item][]; missing: Item[]; extra: Item[] } {
-  // Eligible edges per expected item, best-similarity first.
-  const edges: number[][] = expected.map((e) =>
-    actual
-      .map((a, ai) => ({ ai, score: titleSimilarity(e.title, a.title) }))
-      .filter((entry) => entry.score >= TITLE_MATCH_FLOOR)
-      .sort((x, y) => y.score - x.score)
-      .map((entry) => entry.ai)
-  )
-
-  const matchOfActual: number[] = actual.map(() => -1)
-  const tryAssign = (ei: number, visited: Set<number>): boolean => {
-    for (const ai of edges[ei]) {
-      if (visited.has(ai)) continue
-      visited.add(ai)
-      if (matchOfActual[ai] === -1 || tryAssign(matchOfActual[ai], visited)) {
-        matchOfActual[ai] = ei
-        return true
-      }
-    }
-    return false
+  const n = Math.max(expected.length, actual.length)
+  if (n === 0) return { pairs: [], missing: [], extra: [] }
+  const weight = (ei: number, ai: number): number => {
+    if (ei >= expected.length || ai >= actual.length) return 0
+    const score = titleSimilarity(expected[ei].title, actual[ai].title)
+    return score >= TITLE_MATCH_FLOOR ? CARDINALITY_WEIGHT + score : 0
   }
-  for (let ei = 0; ei < expected.length; ei++) tryAssign(ei, new Set())
+  const assignment = hungarianMax(n, weight)
 
-  const matchOfExpected: number[] = expected.map(() => -1)
-  matchOfActual.forEach((ei, ai) => {
-    if (ei !== -1) matchOfExpected[ei] = ai
-  })
   const pairs: [Item, Item][] = []
-  matchOfExpected.forEach((ai, ei) => {
-    if (ai !== -1) pairs.push([expected[ei], actual[ai]])
+  const matchedE = new Set<number>()
+  const matchedA = new Set<number>()
+  assignment.forEach((ai, ei) => {
+    if (weight(ei, ai) > 0) {
+      pairs.push([expected[ei], actual[ai]])
+      matchedE.add(ei)
+      matchedA.add(ai)
+    }
   })
   return {
     pairs,
-    missing: expected.filter((_, ei) => matchOfExpected[ei] === -1),
-    extra: actual.filter((_, ai) => matchOfActual[ai] === -1),
+    missing: expected.filter((_, ei) => !matchedE.has(ei)),
+    extra: actual.filter((_, ai) => !matchedA.has(ai)),
   }
+}
+
+/**
+ * Maximum-weight perfect assignment on an n×n matrix (Kuhn–Munkres with
+ * potentials, the standard O(n³) formulation on costs = -weight). Returns
+ * `assignment[row] = column`.
+ */
+export function hungarianMax(n: number, weight: (row: number, col: number) => number): number[] {
+  const INF = Number.POSITIVE_INFINITY
+  const cost = (r: number, c: number) => -weight(r, c)
+  // 1-indexed potentials and matching, per the classic formulation.
+  const u = new Array<number>(n + 1).fill(0)
+  const v = new Array<number>(n + 1).fill(0)
+  const p = new Array<number>(n + 1).fill(0) // p[col] = row matched to col
+  const way = new Array<number>(n + 1).fill(0)
+  for (let i = 1; i <= n; i++) {
+    p[0] = i
+    let j0 = 0
+    const minv = new Array<number>(n + 1).fill(INF)
+    const used = new Array<boolean>(n + 1).fill(false)
+    do {
+      used[j0] = true
+      const i0 = p[j0]
+      let delta = INF
+      let j1 = 0
+      for (let j = 1; j <= n; j++) {
+        if (used[j]) continue
+        const cur = cost(i0 - 1, j - 1) - u[i0] - v[j]
+        if (cur < minv[j]) {
+          minv[j] = cur
+          way[j] = j0
+        }
+        if (minv[j] < delta) {
+          delta = minv[j]
+          j1 = j
+        }
+      }
+      for (let j = 0; j <= n; j++) {
+        if (used[j]) {
+          u[p[j]] += delta
+          v[j] -= delta
+        } else {
+          minv[j] -= delta
+        }
+      }
+      j0 = j1
+    } while (p[j0] !== 0)
+    do {
+      const j1 = way[j0]
+      p[j0] = p[j1]
+      j0 = j1
+    } while (j0 !== 0)
+  }
+  const assignment = new Array<number>(n).fill(-1)
+  for (let j = 1; j <= n; j++) if (p[j] !== 0) assignment[p[j] - 1] = j - 1
+  return assignment
 }
 
 const iso = (ms?: number) => (ms === undefined ? "no date" : new Date(ms).toISOString())
@@ -247,7 +298,9 @@ function scoreGrading(
   }
   // Only the categories no expected entry matched are extra (CR 3898824615).
   const extras = got.filter((_, index) => !used.has(index))
-  if (got.length > want.length && extras.length > 0) {
+  // Whenever any exist — equal counts can still hide one missing + one extra
+  // (CR 3898882501).
+  if (extras.length > 0) {
     mismatches.push(`${extras.length} extra categor(ies): ${extras.map((c) => c.name).join(", ")}`)
   }
 
