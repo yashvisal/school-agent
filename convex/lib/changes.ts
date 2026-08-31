@@ -392,6 +392,9 @@ function fallbackProvenance(change: Doc<"changes">) {
  */
 function withAssertedProvenance(change: Doc<"changes">, after: Bag, patch: Bag): Bag {
   if (!CALLER_ASSERTED_ORIGINS.has(change.origin)) return patch
+  // An empty patch changed no stored value; stamping chat provenance onto an
+  // untouched row would misattribute values that still came from their source.
+  if (Object.keys(patch).length === 0) return patch
   return { ...patch, provenance: provenanceFor(change, after) }
 }
 

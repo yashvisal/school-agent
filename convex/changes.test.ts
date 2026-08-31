@@ -533,6 +533,41 @@ describe("inline confirmation evidence", () => {
     expect(deadline?.provenance.sourceRef).toBe(moved.changeId)
   })
 
+  test("a chat-origin patch that changes nothing leaves provenance untouched", async () => {
+    const t = setupTest()
+    const { studentId, courseId } = await seed(t)
+
+    const added = await t.mutation(internal.changes.propose, {
+      studentId,
+      courseId,
+      kind: "deadline_added",
+      entity: { table: "deadlines" },
+      after: deadlineAfter(courseId),
+      origin: "canvas",
+    })
+    const deadlineId = await t.run(
+      async (ctx) => (await ctx.db.get("changes", added.changeId))?.entity.id
+    )
+
+    // `after` carries no patchable key, so no stored value moves — and the
+    // row must keep saying Canvas, not get stamped as chat-asserted.
+    await t.mutation(internal.changes.propose, {
+      studentId,
+      kind: "deadline_moved",
+      entity: { table: "deadlines", id: deadlineId },
+      after: {},
+      origin: "chat",
+      confirmedInline: true,
+      evidence: { quotedReply: "yeah" },
+    })
+
+    const deadline = await t.run(async (ctx) =>
+      ctx.db.get("deadlines", deadlineId as Id<"deadlines">)
+    )
+    expect(deadline?.provenance.source).toBe("canvas")
+    expect(deadline?.provenance.confidence).toBe(1)
+  })
+
   test("a quoted reply with no message id remains accountability-only, and lands", async () => {
     const t = setupTest()
     const { studentId, courseId } = await seed(t)
