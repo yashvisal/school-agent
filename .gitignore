@@ -41,3 +41,11 @@ next-env.d.ts
 !.env.example
 
 .vercel
+
+# eve (agent runtimes): dev caches + auto-installed optional peers
+agent/**/.eve/
+agent/**/node_modules/
+.eve/
+
+# local lint report
+.lint.json

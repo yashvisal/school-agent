@@ -28,7 +28,11 @@ Every page renders in the viewport with a rail: Dashboard/Semester get Context/T
 
 ## Spike B — de-risk eve for the workspace (2–3 days, parallel to Spike A)
 
-1. **Per-session isolation (first, disqualifying if it fails).** eve's default is one sandbox per *agent*. We need one isolated sandbox/filesystem per workspace session (student × course), hydrated for that student only, torn down after. Find the supported path (`onSession()` / `ctx.getSandbox()` / per-session backend); if there is none, eve does not run the workspace agent.
+1. **Per-session isolation — RESOLVED, eve is not disqualified.** The premise was wrong: eve 0.47 keys session sandboxes **per durable session**, not per agent and not per deployment. `onSession({ use, ctx })` runs once per session (and again on a definition change or after `delete()`), `ctx.session.auth.current` names the principal while the sandbox initializes, and `sandbox.id` is a stable per-session id that embeds the durable session id. `agent/workspace/sandbox.ts` uses that hook to write a timestamped `SESSION.md` and is where `hydrateWorkspace(studentId, courseId)` will run.
+
+   **Evidence** — `scripts/spike-b-isolation.mts`, 14/14 PASS on the **Vercel Sandbox backend** (what production uses) and again on `just-bash`. Two durable sessions of the same agent: A's `marker-<A>.txt` never appears in B's `/workspace` and vice versa; sandbox ids differ; the filesystem persists across turns *within* a session; `sandbox.delete()` discards the workspace and the next `getSandbox()` re-provisions and reruns `onSession` — so hydrate → use → tear down → re-hydrate is supported and the "always rebuildable" rule holds. Produced with **zero model calls** (a test-only hook reaches `ctx.getSandbox()` on `message.received`, the same seam a tool uses), because the AI Gateway account is blocked on `customer_verification_required` — add a card before Spike B #2/#3.
+
+   **Caveats.** (a) Vercel sandboxes idle out after ~30 min; eve preserves the filesystem and resumes, and a resume is *not* a new session, so `onSession` does not rerun — hydration staleness must be recorded in the workspace, not inferred. (b) `onSession` also does **not** rerun on a provider-loss replacement under the same sandbox key, so `networkPolicy: "deny-all"` and any other security-critical config is set on the **backend factory**, and a replacement may come back with an empty workspace — re-hydration must be idempotent. (c) `sandbox.id` is eve's per-session key, not the provider's id: it is unchanged across a `delete()`, so assert isolation on file visibility. (d) Local dev has no Docker and falls back to `just-bash` (virtual FS, no VM, no network isolation) — that proves eve's session keying only; the Vercel run is what proves VM isolation. Full write-up: `agent/workspace/README.md`.
 2. **Streaming** — an eve session streams `dynamic-tool` parts into the forked harness and renders an approval card and a diff table (load-bearing for Face).
 3. **`hydrateWorkspace` prototype** on one Duke course — assemble `state.md`, `signals.md`, materials manifest from Convex; have the agent answer a question from `state.md`; write an artifact back to Convex storage before session end. This single test exercises the truth rule, hydration, and the eve↔Convex seam.
 4. **Cost hygiene** — Spend Management with *pause* enabled (default is notify-only at $200); sandboxes ephemeral and stopped promptly (memory bills wall-clock); confirm sandbox region pricing; `usage` rows appear in Convex for every call.
@@ -56,8 +60,7 @@ Every page renders in the viewport with a rail: Dashboard/Semester get Context/T
 
 ## Open questions
 
-- How much of the harness's dark-only token set to keep vs. adding a light theme.
-- eve per-session sandbox isolation (Spike B #1) — the one open question that can change the runtime decision.
+- ~~How much of the harness's dark-only token set to keep vs. adding a light theme.~~ Resolved: the harness ships *both* themes already, so we merged its full token set and extended it app-wide by aliasing the shadcn semantic variables onto it (one system for harness primitives, shadcn and Clerk).
 - How "recently discussed" context is represented so Dashboard ordering stays simple.
 - Schedule-parse approval UI: how simple can the weekly verification view be?
 
