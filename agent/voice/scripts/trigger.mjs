@@ -24,9 +24,9 @@ if (!secret) {
   process.exit(1)
 }
 
-const phone = arg("phone", process.env.VOICE_DEMO_PHONE)
+const phone = arg("phone", process.env.VOICE_DEV_PHONE)
 if (!phone) {
-  console.error("Set VOICE_DEMO_PHONE in .env.local, or pass --phone +1...")
+  console.error("Set VOICE_DEV_PHONE in .env.local, or pass --phone +1...")
   process.exit(1)
 }
 
@@ -36,20 +36,11 @@ const body = {
   kind: arg("kind", "morning"),
 }
 // `date` is required and must be the STUDENT's local calendar day (the Convex
-// cron computes this per student). The default below uses the DEMO student's
-// timezone (fixtures/student-demo.json), which is only correct for
-// VOICE_DEMO_PHONE — for any other --phone we don't know the timezone, so
-// require an explicit --date instead of guessing.
-let date = arg("date")
-if (!date) {
-  if (args.includes("--phone") && body.phone !== process.env.VOICE_DEMO_PHONE) {
-    console.error("--date YYYY-MM-DD is required with --phone (unknown timezone for that student)")
-    process.exit(1)
-  }
-  const tz = "America/New_York"
-  date = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date())
-}
-body.date = date
+// cron computes this per student; nightly:runNow is the real dev entry point).
+// This script only guesses ET for ad-hoc pokes — pass --date for anything else.
+body.date =
+  arg("date") ??
+  new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date())
 
 const startedAt = Date.now()
 const res = await fetch(url, {

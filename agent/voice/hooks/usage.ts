@@ -1,50 +1,71 @@
 import { defineHook } from "eve/hooks"
 
-import { appendSpike } from "../lib/core.js"
+import { logUsage } from "../lib/core.js"
+import { MODEL } from "../lib/model.js"
+import { resolveStudent, sessionPhone } from "../lib/students.js"
 
 /**
  * Per-LLM-call usage logging (vision §10: mandatory from the first call).
  *
- * eve emits one `step.completed` per model call, and its payload carries
+ * eve emits one `step.completed` per model call with
  * `usage: { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens,
- * costUsd }`. That is genuinely per-call, not per-turn — the kill-criterion
- * question answers itself in the affirmative.
+ * costUsd }`. Each writes one row to Core's `usage` table over
+ * `POST /voice/logUsage` (convex/VOICE_TOOLS.md §7) — the one cost record that
+ * survives a change of agent runtime, which is why it lives in Convex, not eve.
  *
- * Two gaps worth naming: `step.completed` does not carry the model id (only
- * `compaction.requested` does), so we read it from the session/agent config, and
- * `usage` is optional — a provider that reports nothing yields an empty object.
+ * Two gaps worth naming: `step.completed` does not carry the model id, so it
+ * comes from the shared `MODEL` pin; and `usage` is optional — a provider that
+ * reports nothing yields zeros, which the row still records (a call happened).
  *
- * SPIKE STUB: appends to `.spike/usage.jsonl`.
- * TODO(core): replace with the Convex `usage` mutation. The `usage` table does
- * not exist yet; Core owns it, and it is the one thing that must stay true
- * across a change of runtime.
+ * `studentId` is best-effort: resolved from the session's Photon principal via
+ * the cached resolveStudent. A failure to attribute — or to log at all — must
+ * never break the turn; it is shouted to the log instead.
  */
-const MODEL = "anthropic/claude-sonnet-5"
-
 export default defineHook({
   events: {
     async "step.completed"(event, ctx) {
       const usage = event.data.usage ?? {}
-      const row = {
-        at: new Date().toISOString(),
-        sessionId: ctx.session.id,
-        turnId: event.data.turnId,
-        stepIndex: event.data.stepIndex,
-        // TODO(core): join to studentId via the session's auth principal once
-        // the phone <-> student mapping lives in Convex.
-        studentId: null as string | null,
-        surface: "voice",
-        model: MODEL,
-        inputTokens: usage.inputTokens ?? null,
-        outputTokens: usage.outputTokens ?? null,
-        cacheReadTokens: usage.cacheReadTokens ?? null,
-        cacheWriteTokens: usage.cacheWriteTokens ?? null,
-        costUsd: usage.costUsd ?? null,
-        finishReason: event.data.finishReason,
+
+      let studentId: string | undefined
+      if (sessionPhone(ctx as { session: { auth?: unknown } })) {
+        try {
+          studentId = (await resolveStudent(ctx as { session: { auth?: unknown } })).studentId
+        } catch (error) {
+          console.warn("[voice/usage] could not attribute studentId", String(error))
+        }
       }
 
-      console.info("[voice/usage]", row)
-      await appendSpike("usage.jsonl", row)
+      // Cache reads/writes are prompt-side tokens; Core's schema keeps the
+      // two-column shape, so they fold into promptTokens.
+      const promptTokens =
+        (usage.inputTokens ?? 0) +
+        (usage.cacheReadTokens ?? 0) +
+        (usage.cacheWriteTokens ?? 0)
+
+      try {
+        const { usageId } = await logUsage({
+          studentId,
+          surface: "voice",
+          model: MODEL,
+          promptTokens,
+          completionTokens: usage.outputTokens ?? 0,
+          costUsd: usage.costUsd,
+          sessionId: ctx.session.id,
+        })
+        console.info("[voice/usage]", {
+          usageId,
+          sessionId: ctx.session.id,
+          turnId: event.data.turnId,
+          stepIndex: event.data.stepIndex,
+          promptTokens,
+          completionTokens: usage.outputTokens ?? 0,
+          costUsd: usage.costUsd,
+          finishReason: event.data.finishReason,
+        })
+      } catch (error) {
+        // Loud, because a silent gap here is an unmetered LLM call.
+        console.error("[voice/usage] FAILED to log usage row", String(error))
+      }
     },
   },
 })

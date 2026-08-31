@@ -1,17 +1,17 @@
 import { defineTool } from "eve/tools"
 import { z } from "zod"
 
-import { appendSpike, newId } from "../lib/core.js"
+import { recordSignal } from "../lib/core.js"
 import { resolveStudent } from "../lib/students.js"
 
 /**
  * How Voice becomes an expert in this student (vision §4b).
  *
  * Cheap to log, impossible to backfill. Every exchange can produce a signal;
- * the nightly pass reads them and adjusts without ever stating a rule.
- *
- * SPIKE STUB: appends to `.spike/signals.jsonl`.
- * TODO(core): call the Convex `recordSignal` mutation.
+ * the nightly pass reads them and adjusts without ever stating a rule. Calls
+ * Core's `POST /voice/recordSignal` (convex/VOICE_TOOLS.md §5); a `pacing`
+ * signal carrying `refs.courseId` feeds the planner's effort estimates, so set
+ * the courseId whenever you can.
  */
 export default defineTool({
   description: [
@@ -36,16 +36,10 @@ export default defineTool({
       .describe("Ids copied verbatim from getFeasibleActions output."),
   }),
   async execute(input, ctx) {
-    const student = resolveStudent(ctx)
-    const signalId = newId("sig")
-
-    await appendSpike("signals.jsonl", {
-      at: new Date().toISOString(),
-      signalId,
-      studentId: student.studentId,
-      sessionId: ctx.session.id,
-      surface: "voice",
+    const student = await resolveStudent(ctx)
+    const { signalId } = await recordSignal(student.studentId, {
       ...input,
+      sessionId: ctx.session.id,
     })
 
     console.info("[voice/recordSignal]", { signalId, kind: input.kind })

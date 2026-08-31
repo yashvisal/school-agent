@@ -34,14 +34,18 @@ const TriggerBody = z.object({
       },
       { message: "Not a real calendar date." },
     ),
+  // The stored nightly snapshot this trigger describes. Traceability only: the
+  // agent's getFeasibleActions call returns this same snapshot via Core's plan
+  // cache, so the prompt never needs to carry it.
+  planRunId: z.string().min(1).optional(),
 })
 
 /**
- * Dedupe. In-memory only: a restart or a second serverless instance forgets
- * everything, so this protects against a retry storm inside one process and
- * nothing else.
- * TODO(core): the real idempotency key lives in Convex next to the cron that
- * mints `operationId`, checked before the POST.
+ * Dedupe. In-memory only — a restart or a second serverless instance forgets
+ * everything — which is fine, because the DURABLE idempotency lives in Core:
+ * `planRuns.operationId` is create-once per student-day and a run already
+ * `triggered` is never re-POSTed (convex/nightly.ts). This set only absorbs a
+ * same-process retry storm between Core's POST and its `markTrigger` write.
  */
 const seenOperations = new Set<string>()
 
@@ -80,9 +84,10 @@ function triggerPrompt(kind: "morning" | "checkin", date: string): string {
     ].join(" ")
   }
   return [
-    `MORNING PUSH for ${date}. Call getFeasibleActions, pick 1-3 actions, and text the plan.`,
-    `First message rule: no links, no media. Plain text only, no markdown. Two or three short`,
-    `lines. Concrete times from the windows the tool returned; never invent one.`,
+    `MORNING PUSH for ${date}. Call getFeasibleActions with that date, pick 1-3 actions,`,
+    `and text the plan. First message rule: no links, no media. Plain text only, no`,
+    `markdown. Two or three short lines. Concrete times from the fits the tool returned;`,
+    `never invent one.`,
   ].join(" ")
 }
 
@@ -97,7 +102,7 @@ export default defineChannel({
       if (!parsed.success) {
         return Response.json({ error: parsed.error.issues }, { status: 400 })
       }
-      const { phone, operationId, kind, date } = parsed.data
+      const { phone, operationId, kind, date, planRunId } = parsed.data
 
       if (seenOperations.has(operationId)) {
         return Response.json({ status: "duplicate", operationId }, { status: 200 })
@@ -126,6 +131,7 @@ export default defineChannel({
         operationId,
         kind,
         date: day,
+        planRunId,
         to: `…${phone.slice(-4)}`,
         sessionId: session.id,
         handoffMs: Date.now() - startedAt,
