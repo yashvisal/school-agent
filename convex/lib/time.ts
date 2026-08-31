@@ -181,9 +181,18 @@ export function formatDateLabel(dateStr: string): string {
   return `${WEEKDAYS[d.getUTCDay()]} ${months[month - 1]} ${day}`
 }
 
-/** "11:59pm" / "7pm" / "9:30am" from minutes-from-midnight. */
+/**
+ * "11:59pm" / "7pm" / "9:30am" from minutes-from-midnight.
+ *
+ * `1440` is the *end* of the day, not the start of it: the planner uses it as
+ * the default cutoff and a window running to midnight ends there. Rendering it
+ * as "12am" would read as the start of the day ("9am–12am"), so it is spelled
+ * out (CR 3892156227). `0` is still "12am".
+ */
 export function formatClock(minutes: number): string {
-  const total = ((Math.round(minutes) % 1440) + 1440) % 1440
+  const rounded = Math.round(minutes)
+  if (rounded === 1440) return "midnight"
+  const total = ((rounded % 1440) + 1440) % 1440
   const h24 = Math.floor(total / 60)
   const m = total % 60
   const suffix = h24 < 12 ? "am" : "pm"

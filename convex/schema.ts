@@ -50,7 +50,10 @@ export default defineSchema({
 
   changes: defineTable(changeFields)
     .index("by_student_status", ["studentId", "status"])
-    .index("by_student_createdAt", ["studentId", "createdAt"]),
+    .index("by_student_createdAt", ["studentId", "createdAt"])
+    // "has anything landed since the plan was computed?" — the cached nightly
+    // snapshot is invalidated by a change resolved after `planRuns.computedAt`.
+    .index("by_student_resolvedAt", ["studentId", "resolvedAt"]),
 
   sources: defineTable(sourceFields)
     .index("by_student", ["studentId"])

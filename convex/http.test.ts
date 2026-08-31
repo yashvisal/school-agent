@@ -204,6 +204,25 @@ describe("body validation", () => {
     expect(body.error).toMatch(/YYYY-MM-DD/)
   })
 
+  test("getFeasibleActions rejects a date that never happened", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    // Right shape, wrong calendar: `Date.UTC` would silently roll this into March.
+    for (const date of ["2026-02-31", "2026-13-01", "2026-00-10"]) {
+      const response = await post(t, "/voice/getFeasibleActions", {
+        studentId: seeded.studentId,
+        date,
+      })
+      expect(response.status).toBe(400)
+    }
+    // A real leap day still passes.
+    const leap = await post(t, "/voice/getFeasibleActions", {
+      studentId: seeded.studentId,
+      date: "2028-02-29",
+    })
+    expect(leap.status).toBe(200)
+  })
+
   test("a missing required field is a 400 naming the field", async () => {
     const t = setupTest()
     await seed(t)
@@ -382,16 +401,68 @@ describe("recordSignal", () => {
     expect(signal?.provenance.sourceRef).toBe("wrun_A")
   })
 
-  test("an empty signal text surfaces as a 500-free error, not a silent write", async () => {
+  test("an empty signal text is a 400 — a caller mistake, not a server fault", async () => {
     const t = setupTest()
     const seeded = await seed(t)
     const response = await post(t, "/voice/recordSignal", {
       studentId: seeded.studentId,
       signal: { kind: "other", text: "  " },
     })
-    expect(response.status).toBeGreaterThanOrEqual(400)
+    expect(response.status).toBe(400)
+    const body = (await response.json()) as { error: string }
+    // The coded prefix is consumed by the mapper, not echoed at the caller.
+    expect(body.error).toBe("signal text must not be empty")
     const signals = await t.run(async (ctx) => ctx.db.query("studentSignals").take(10))
     expect(signals).toHaveLength(0)
+  })
+})
+
+describe("error mapping", () => {
+  test("a coded error becomes its status, with the prefix stripped", async () => {
+    const t = setupTest()
+    await seed(t)
+    // Two students share one number: `resolveStudent` throws `409: ...`.
+    await t.run(async (ctx) =>
+      ctx.db.insert("students", {
+        clerkId: "user_twin",
+        timezone: TZ,
+        phone: "+15551234567",
+        classBlocks: [],
+        availability: { weekly: [], exceptions: [] },
+        status: "active",
+      })
+    )
+
+    const response = await post(t, "/voice/resolveStudent", { phone: "+15551234567" })
+    expect(response.status).toBe(409)
+    const body = (await response.json()) as { ok: boolean; error: string }
+    expect(body.ok).toBe(false)
+    expect(body.error).toBe("more than one student has that phone number")
+  })
+
+  test("an unrecognised error is a 500 that says nothing about the inside", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {})
+    // A student row whose timezone the planner cannot read: an internal fault
+    // with no coded prefix, exactly the class of error that must not leak.
+    await t.run(async (ctx) =>
+      ctx.db.patch("students", seeded.studentId, { timezone: "Mars/Olympus_Mons" })
+    )
+
+    const response = await post(t, "/voice/getFeasibleActions", {
+      studentId: seeded.studentId,
+      date: DATE,
+    })
+
+    expect(response.status).toBe(500)
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: "internal error",
+    })
+    // Logged where it is useful, rather than returned where it is not.
+    expect(errors).toHaveBeenCalled()
+    errors.mockRestore()
   })
 })
 

@@ -361,14 +361,108 @@ export const studentSignalFields = {
   provenance: provenanceV,
 }
 
+// ---------------------------------------------------------------------------
+// Plan shape (planner v0)
+//
+// Declared here rather than in `convex/planner.ts` so the *writer* (nightly
+// `storeRun`, the `planRuns` table) and the *reader* (`internal.voice
+// .getFeasibleActions`) are validated against one definition. A malformed
+// snapshot is then rejected at the write boundary instead of surfacing later as
+// a failed Voice read (CR 3892156235).
+//
+// Ids are `v.string()` rather than `v.id(...)`: `lib/planner.ts` is deliberately
+// Convex-agnostic and types them as strings, and an `Id` is a string at runtime.
+// ---------------------------------------------------------------------------
+
+export const windowV = v.object({
+  startMin: v.number(),
+  endMin: v.number(),
+  durationMin: v.number(),
+})
+
+export const fitV = v.object({
+  windowIndex: v.number(),
+  startMin: v.number(),
+  endMin: v.number(),
+})
+
+export const pendingAnnotationV = v.object({
+  changeId: v.string(),
+  kind: v.string(),
+  summary: v.string(),
+  affectsDate: v.optional(v.string()),
+})
+
+export const signalsDigestV = v.object({
+  availability: v.array(v.string()),
+  pacing: v.array(v.string()),
+  preference: v.array(v.string()),
+  difficulty: v.array(v.string()),
+  life_event: v.array(v.string()),
+  other: v.array(v.string()),
+})
+
+export const optionV = v.object({
+  taskId: v.optional(v.string()),
+  deadlineId: v.optional(v.string()),
+  courseId: v.optional(v.string()),
+  courseName: v.optional(v.string()),
+  title: v.string(),
+  kind: deadlineKindV,
+  dueAt: v.optional(v.number()),
+  dueInDays: v.optional(v.number()),
+  pointsPossible: v.optional(v.number()),
+  category: v.optional(v.string()),
+  categoryWeight: v.optional(v.number()),
+  estEffortMin: v.number(),
+  estEffortConfidence: effortConfidenceV,
+  effortSource: v.union(v.literal("prior"), v.literal("signal")),
+  fits: v.array(fitV),
+  remainingWindowsBeforeDue: v.number(),
+  facts: v.array(v.string()),
+  pending: v.optional(v.array(v.string())),
+  signals: v.optional(v.array(v.string())),
+  /**
+   * Past due and not submitted. Such an option always carries `fits: []` — the
+   * hard guarantee that no window is ever proposed after the due time holds —
+   * but it is emitted so the agent can mention the miss.
+   */
+  overdue: v.optional(v.boolean()),
+})
+
+export const feasibleActionsV = v.object({
+  date: v.string(),
+  windows: v.array(windowV),
+  options: v.array(optionV),
+  pending: v.array(pendingAnnotationV),
+  signalsDigest: signalsDigestV,
+})
+
+/** The `planRuns.feasible` column: the day, its windows, and its options. */
+export const planFeasibleV = feasibleActionsV.omit("pending", "signalsDigest")
+
+/**
+ * What `internal.voice.getFeasibleActions` returns: the plan plus the provenance
+ * of the plan (which stored run it came from, when it was computed, in whose
+ * timezone). `convex/VOICE_TOOLS.md` §3 documents the same shape.
+ */
+export const planV = v.object({
+  /** Set only when this response IS the stored nightly snapshot; Voice cites it. */
+  planRunId: v.optional(v.id("planRuns")),
+  computedAt: v.number(),
+  cached: v.boolean(),
+  timezone: v.string(),
+  ...feasibleActionsV.fields,
+})
+
 export const planRunFields = {
   studentId: v.id("students"),
   /** Target day, "YYYY-MM-DD". */
   date: v.string(),
   computedAt: v.number(),
-  feasible: v.any(),
-  pendingAnnotations: v.any(),
-  signalsDigest: v.any(),
+  feasible: planFeasibleV,
+  pendingAnnotations: v.array(pendingAnnotationV),
+  signalsDigest: signalsDigestV,
   /** Idempotency key for the eve Voice session trigger. */
   operationId: v.string(),
   voiceSessionId: v.optional(v.string()),

@@ -6,11 +6,12 @@ import { internalQuery, query } from "./_generated/server"
 import { requireStudent } from "./lib/auth"
 import type { FeasibleActions } from "./lib/planner"
 import {
-  DEFAULT_HORIZON_DAYS,
+  OVERDUE_LOOKBACK_DAYS,
   feasibleActions as computeFeasibleActions,
+  normalizeHorizon,
 } from "./lib/planner"
 import { addDays, startOfLocalDay } from "./lib/time"
-import { deadlineKindV, effortConfidenceV } from "./lib/validators"
+import { feasibleActionsV } from "./lib/validators"
 
 /**
  * Planner v0, wired to the database. The maths lives in `lib/planner.ts` (pure,
@@ -23,68 +24,23 @@ import { deadlineKindV, effortConfidenceV } from "./lib/validators"
 // ---------------------------------------------------------------------------
 // Return validators
 //
-// Ids are validated as `v.string()` rather than `v.id(...)`: `lib/planner.ts` is
-// deliberately Convex-agnostic and types them as strings, and an `Id` is a string
-// at runtime. The seam's real contract is documented in `convex/VOICE_TOOLS.md`.
+// The plan shape lives in `lib/validators.ts` (`feasibleActionsV`, `planV`, and
+// friends) so that the nightly writer, the `planRuns` table, and the Voice
+// reader are all validated against one definition. Re-exported here because
+// this is where callers expect to find it; the seam's contract is documented in
+// `convex/VOICE_TOOLS.md`.
 // ---------------------------------------------------------------------------
 
-export const windowV = v.object({
-  startMin: v.number(),
-  endMin: v.number(),
-  durationMin: v.number(),
-})
-
-export const fitV = v.object({
-  windowIndex: v.number(),
-  startMin: v.number(),
-  endMin: v.number(),
-})
-
-export const pendingAnnotationV = v.object({
-  changeId: v.string(),
-  kind: v.string(),
-  summary: v.string(),
-  affectsDate: v.optional(v.string()),
-})
-
-export const signalsDigestV = v.object({
-  availability: v.array(v.string()),
-  pacing: v.array(v.string()),
-  preference: v.array(v.string()),
-  difficulty: v.array(v.string()),
-  life_event: v.array(v.string()),
-  other: v.array(v.string()),
-})
-
-export const optionV = v.object({
-  taskId: v.optional(v.string()),
-  deadlineId: v.optional(v.string()),
-  courseId: v.optional(v.string()),
-  courseName: v.optional(v.string()),
-  title: v.string(),
-  kind: deadlineKindV,
-  dueAt: v.optional(v.number()),
-  dueInDays: v.optional(v.number()),
-  pointsPossible: v.optional(v.number()),
-  category: v.optional(v.string()),
-  categoryWeight: v.optional(v.number()),
-  estEffortMin: v.number(),
-  estEffortConfidence: effortConfidenceV,
-  effortSource: v.union(v.literal("prior"), v.literal("signal")),
-  fits: v.array(fitV),
-  remainingWindowsBeforeDue: v.number(),
-  facts: v.array(v.string()),
-  pending: v.optional(v.array(v.string())),
-  signals: v.optional(v.array(v.string())),
-})
-
-export const feasibleActionsV = v.object({
-  date: v.string(),
-  windows: v.array(windowV),
-  options: v.array(optionV),
-  pending: v.array(pendingAnnotationV),
-  signalsDigest: signalsDigestV,
-})
+export {
+  feasibleActionsV,
+  fitV,
+  optionV,
+  pendingAnnotationV,
+  planFeasibleV,
+  planV,
+  signalsDigestV,
+  windowV,
+} from "./lib/validators"
 
 // ---------------------------------------------------------------------------
 // Loading
@@ -118,9 +74,13 @@ export async function loadFeasibleActions(
   if (!student) throw new Error("404: student not found")
 
   const now = args.now ?? Date.now()
-  const horizonDays = args.horizonDays ?? DEFAULT_HORIZON_DAYS
+  // Clamped here, not just inside the planner: a fractional or negative horizon
+  // reaches `addDays` below and yields "NaN-NaN-NaN" (CR 3892156261).
+  const horizonDays = normalizeHorizon(args.horizonDays)
   const tz = student.timezone
-  const rangeStart = startOfLocalDay(args.date, tz)
+  // The range opens `OVERDUE_LOOKBACK_DAYS` before the planned day so recently
+  // missed work is loaded too; both ends stay bounded.
+  const rangeStart = startOfLocalDay(addDays(args.date, -OVERDUE_LOOKBACK_DAYS), tz)
   const rangeEnd = startOfLocalDay(addDays(args.date, horizonDays + 1), tz)
 
   const courses = await ctx.db

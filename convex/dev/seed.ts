@@ -3,7 +3,7 @@ import { v } from "convex/values"
 import { internal } from "../_generated/api"
 import type { Doc, Id } from "../_generated/dataModel"
 import { internalAction, internalMutation, internalQuery } from "../_generated/server"
-import { hashPayload } from "../lib/diff"
+import { hashSnapshotPayload } from "../lib/diff"
 import {
   canvasFixturePayload,
   FIXTURE_BASE_URL,
@@ -190,7 +190,7 @@ export const fixtureSemester = internalAction({
       await ctx.runMutation(internal.ingest.canvas.ingestPayload, {
         sourceId: target.canvasSourceId,
         payload: canvasPayload,
-        contentHash: await hashPayload(canvasPayload),
+        contentHash: await hashSnapshotPayload(canvasPayload),
         label: "fixture: canvas/base",
       })
     )
@@ -200,7 +200,7 @@ export const fixtureSemester = internalAction({
       await ctx.runMutation(internal.ingest.ical.ingestPayload, {
         sourceId: target.icalSourceId,
         payload: icalPayload,
-        contentHash: await hashPayload(icalPayload),
+        contentHash: await hashSnapshotPayload(icalPayload),
         label: "fixture: ical/canvas",
       })
     )
@@ -245,7 +245,7 @@ export const applyScenario = internalAction({
         await ctx.runMutation(internal.ingest.canvas.ingestPayload, {
           sourceId: target.canvasSourceId,
           payload,
-          contentHash: await hashPayload(payload),
+          contentHash: await hashSnapshotPayload(payload),
           label: `fixture: changes/${args.scenario}`,
         })
       )
@@ -257,7 +257,7 @@ export const applyScenario = internalAction({
       await ctx.runMutation(internal.ingest.ical.ingestPayload, {
         sourceId: target.icalSourceId,
         payload,
-        contentHash: await hashPayload(payload),
+        contentHash: await hashSnapshotPayload(payload),
         label: "fixture: changes/conflict",
       })
     )

@@ -3,8 +3,13 @@ import { describe, expect, test } from "vitest"
 import type { Doc, Id } from "../_generated/dataModel"
 import { EFFORT_PRIORS_MIN, parsePacingHint } from "./effortPriors"
 import type { FeasibleActionsInput, Option } from "./planner"
-import { MIN_BLOCK_MIN, feasibleActions, windowsForDate } from "./planner"
-import { localDateToMs } from "./time"
+import {
+  MIN_BLOCK_MIN,
+  OVERDUE_LOOKBACK_DAYS,
+  feasibleActions,
+  windowsForDate,
+} from "./planner"
+import { addDays, localDateToMs } from "./time"
 
 /**
  * The planner's hard guarantees (core.md, "Planner v0"; vision §10).
@@ -375,14 +380,39 @@ describe("hard guarantee — fits never end after dueAt", () => {
     expect(fits[0].endMin).toBe(9 * 60 + EFFORT_PRIORS_MIN.homework)
   })
 
-  test("a deadline already past is excluded entirely", () => {
+  test("a deadline already past is emitted as overdue, with nothing to fit", () => {
     const result = plan({
       deadlines: [deadline({ dueAt: at("2026-09-11", 12 * 60) })],
+    })
+    // A missed deadline the agent must be able to mention — but the hard
+    // guarantee holds: there is no window after the due time, so there is no fit.
+    const option = only(result.options)
+    expect(option.overdue).toBe(true)
+    expect(option.fits).toEqual([])
+    expect(option.remainingWindowsBeforeDue).toBe(0)
+    expect(option.facts).toContain("past due Fri Sep 11 12pm (3 days ago), not submitted")
+    expect(option.facts).not.toContain("does not fit in any free window on this day")
+  })
+
+  test("overdue work that was handed in is still dropped", () => {
+    for (const submissionStatus of ["submitted", "graded", "excused"] as const) {
+      const result = plan({
+        deadlines: [deadline({ dueAt: at("2026-09-11", 12 * 60), submissionStatus })],
+      })
+      expect(result.options).toEqual([])
+    }
+  })
+
+  test("a deadline past the overdue lookback is gone for good", () => {
+    const result = plan({
+      deadlines: [
+        deadline({ dueAt: at(addDays(MON, -OVERDUE_LOOKBACK_DAYS - 1), 12 * 60) }),
+      ],
     })
     expect(result.options).toEqual([])
   })
 
-  test("a deadline due earlier today is still excluded (past is past)", () => {
+  test("a deadline due earlier today is emitted as overdue, but nothing fits", () => {
     const result = plan({
       date: MON,
       now: at(MON, 15 * 60),
@@ -391,6 +421,7 @@ describe("hard guarantee — fits never end after dueAt", () => {
     // Due today, so still emitted — but nothing fits, and the agent is told.
     const option = only(result.options)
     expect(option.fits).toEqual([])
+    expect(option.overdue).toBeUndefined() // due *today* is not yet a miss
   })
 })
 

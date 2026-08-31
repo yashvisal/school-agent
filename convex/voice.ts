@@ -1,17 +1,21 @@
 import { v } from "convex/values"
 
+import type { Id } from "./_generated/dataModel"
+import type { QueryCtx } from "./_generated/server"
 import { internalMutation, internalQuery } from "./_generated/server"
 import { proposeChangeInternal, tierFor } from "./lib/changes"
+import { normalizePhone } from "./lib/phone"
+import { normalizeConfidence, recordSignalInternal } from "./lib/signals"
 import {
   changeEntityV,
   changeKindV,
   changeStatusV,
-  originV,
+  planV,
   signalKindV,
   surfaceV,
   tierV,
 } from "./lib/validators"
-import { feasibleActionsV, loadFeasibleActions } from "./planner"
+import { loadFeasibleActions } from "./planner"
 import { signalRefsV } from "./signals"
 
 /**
@@ -39,19 +43,45 @@ import { signalRefsV } from "./signals"
 /** A nightly precompute this fresh is reused instead of recomputed. */
 export const PLAN_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000
 
-export const voiceFeasibleV = v.object({
-  /** Set when this came from a stored nightly run; the Voice run cites it. */
-  planRunId: v.optional(v.id("planRuns")),
-  computedAt: v.number(),
-  cached: v.boolean(),
-  timezone: v.string(),
-  ...feasibleActionsV.fields,
-})
+/** The response shape, declared once in `lib/validators.ts`. Re-exported here. */
+export const voiceFeasibleV = planV
+
+/**
+ * True when anything landed in `changes` after the snapshot was computed.
+ *
+ * A cached plan is only safe to serve while the facts it was built on still
+ * hold. A change created since — or, more importantly, *resolved* since (an
+ * approval in chat, a rejection, an auto-applied Canvas poll) — means the
+ * snapshot describes a day that no longer exists, and Voice would answer a
+ * follow-up with facts the student has already corrected.
+ */
+async function changedSince(
+  ctx: QueryCtx,
+  studentId: Id<"students">,
+  computedAt: number
+): Promise<boolean> {
+  const created = await ctx.db
+    .query("changes")
+    .withIndex("by_student_createdAt", (q) =>
+      q.eq("studentId", studentId).gt("createdAt", computedAt)
+    )
+    .first()
+  if (created) return true
+
+  const resolved = await ctx.db
+    .query("changes")
+    .withIndex("by_student_resolvedAt", (q) =>
+      q.eq("studentId", studentId).gt("resolvedAt", computedAt)
+    )
+    .first()
+  return resolved !== null
+}
 
 /**
  * The plan for `date`. Serves the nightly `planRuns` snapshot when one was
- * computed within `PLAN_CACHE_MAX_AGE_MS`, so the morning text and any follow-up
- * in the same conversation describe the same day; otherwise recomputes live.
+ * computed within `PLAN_CACHE_MAX_AGE_MS` *and* nothing has changed since, so
+ * the morning text and any follow-up in the same conversation describe the same
+ * day; otherwise recomputes live.
  */
 export const getFeasibleActions = internalQuery({
   args: {
@@ -59,7 +89,7 @@ export const getFeasibleActions = internalQuery({
     date: v.string(),
     now: v.optional(v.number()),
   },
-  returns: voiceFeasibleV,
+  returns: planV,
   handler: async (ctx, args) => {
     const now = args.now ?? Date.now()
 
@@ -71,25 +101,28 @@ export const getFeasibleActions = internalQuery({
       .order("desc")
       .first()
 
-    if (run && now - run.computedAt <= PLAN_CACHE_MAX_AGE_MS) {
+    const fresh =
+      run !== null &&
+      now - run.computedAt <= PLAN_CACHE_MAX_AGE_MS &&
+      !(await changedSince(ctx, args.studentId, run.computedAt))
+
+    if (run && fresh) {
       const student = await ctx.db.get("students", args.studentId)
       if (!student) throw new Error("404: student not found")
-      const feasible = run.feasible as {
-        date: string
-        windows: unknown[]
-        options: unknown[]
-      }
-      return {
+      // Annotated rather than cast: a new required field on `planV` must fail to
+      // compile here, not fail its `returns` validator at runtime (CR 3892156276).
+      const cached: typeof planV.type = {
         planRunId: run._id,
         computedAt: run.computedAt,
         cached: true,
         timezone: student.timezone,
-        date: feasible.date ?? run.date,
-        windows: feasible.windows ?? [],
-        options: feasible.options ?? [],
-        pending: run.pendingAnnotations ?? [],
+        date: run.feasible.date,
+        windows: run.feasible.windows,
+        options: run.feasible.options,
+        pending: run.pendingAnnotations,
         signalsDigest: run.signalsDigest,
-      } as typeof voiceFeasibleV.type
+      }
+      return cached
     }
 
     const { student, result } = await loadFeasibleActions(ctx, {
@@ -97,8 +130,10 @@ export const getFeasibleActions = internalQuery({
       date: args.date,
       now,
     })
+    // No `planRunId`: this plan did not come from the stored run, and citing a
+    // snapshot that was not used would misstate its provenance (CR 3892156287).
     return {
-      planRunId: run?._id,
+      planRunId: undefined,
       computedAt: now,
       cached: false,
       timezone: student.timezone,
@@ -117,8 +152,6 @@ export const voiceChangeV = v.object({
   entity: changeEntityV,
   before: v.optional(v.any()),
   after: v.optional(v.any()),
-  /** Defaults to `chat` — anything Voice proposes was interpreted from a message. */
-  origin: v.optional(originV),
   reason: v.optional(v.string()),
   conflict: v.optional(v.boolean()),
   /**
@@ -133,7 +166,16 @@ export const voiceChangeV = v.object({
  * The only write path Voice has into student state. Everything lands in
  * `changes` and is tiered there (core.md, "Two-tier apply rule"): chat-origin
  * changes are `needs_approval`, applied immediately only when `confirmedInline`.
+ *
+ * **`origin` is not a caller choice.** It is forced to `chat` here: everything
+ * Voice proposes was interpreted from a message, and `tierFor` maps `canvas` and
+ * `ical` to the `auto` tier, so an accepted origin would let Voice apply a change
+ * to student state with no source evidence and no approval — self-elevation past
+ * the whole two-tier rule (CR 3892156302). `lib/changes.ts` independently
+ * overwrites any `after.provenance` claiming a structured source.
  */
+const VOICE_ORIGIN = "chat" as const
+
 export const proposeChange = internalMutation({
   args: {
     studentId: v.id("students"),
@@ -145,7 +187,6 @@ export const proposeChange = internalMutation({
     tier: tierV,
   }),
   handler: async (ctx, args) => {
-    const origin = args.change.origin ?? "chat"
     const { changeId, status } = await proposeChangeInternal(ctx, {
       studentId: args.studentId,
       courseId: args.change.courseId,
@@ -153,12 +194,12 @@ export const proposeChange = internalMutation({
       entity: args.change.entity,
       before: args.change.before,
       after: args.change.after,
-      origin,
+      origin: VOICE_ORIGIN,
       reason: args.change.reason,
       conflict: args.change.conflict,
       confirmedInline: args.change.confirmedInline,
     })
-    return { changeId, status, tier: tierFor(origin, args.change.conflict) }
+    return { changeId, status, tier: tierFor(VOICE_ORIGIN, args.change.conflict) }
   },
 })
 
@@ -184,37 +225,21 @@ export const recordSignal = internalMutation({
     signal: voiceSignalV,
   },
   returns: v.id("studentSignals"),
-  handler: async (ctx, args) => {
-    const text = args.signal.text.trim()
-    if (!text) throw new Error("signal text must not be empty")
-
-    const confidence =
-      args.signal.confidence !== undefined &&
-      Number.isFinite(args.signal.confidence) &&
-      args.signal.confidence >= 0 &&
-      args.signal.confidence <= 1
-        ? args.signal.confidence
-        : 0.6
-
-    const observedAt =
-      args.signal.observedAt !== undefined && Number.isFinite(args.signal.observedAt)
-        ? args.signal.observedAt
-        : Date.now()
-
-    return await ctx.db.insert("studentSignals", {
+  handler: async (ctx, args) =>
+    // One write path, shared with `internal.signals.record` (CR 3892156309).
+    await recordSignalInternal(ctx, {
       studentId: args.studentId,
       kind: args.signal.kind,
-      text,
-      refs: args.signal.refs ?? {},
+      text: args.signal.text,
+      refs: args.signal.refs,
       origin: "chat",
-      observedAt,
+      observedAt: args.signal.observedAt,
       provenance: {
         source: "chat",
         sourceRef: args.signal.sessionId ?? "voice",
-        confidence,
+        confidence: normalizeConfidence(args.signal.confidence),
       },
-    })
-  },
+    }),
 })
 
 // ---------------------------------------------------------------------------
@@ -282,11 +307,19 @@ export const resolveStudent = internalQuery({
         .withIndex("by_clerkId", (q) => q.eq("clerkId", args.clerkId!))
         .unique()
     } else if (args.phone) {
+      // `by_phone` is not a unique index and `phone` is optional, so two rows
+      // can carry the same normalized number. Resolving that to whichever the
+      // index happens to yield first would hand one student's plan to another
+      // (CR 3892156326) — it is a 409 for a human to fix, never a guess.
       const phone = normalizePhone(args.phone)
-      student = await ctx.db
+      const matches = await ctx.db
         .query("students")
         .withIndex("by_phone", (q) => q.eq("phone", phone))
-        .first()
+        .take(2)
+      if (matches.length > 1) {
+        throw new Error("409: more than one student has that phone number")
+      }
+      student = matches[0] ?? null
     }
     if (!student) return null
     return {
@@ -298,11 +331,8 @@ export const resolveStudent = internalQuery({
 })
 
 /**
- * E.164-ish: digits with a leading `+`. Photon hands us `+15551234567`; a human
- * typing into onboarding may not. Stored numbers are normalized the same way.
+ * Re-exported from `lib/phone.ts`, which is also what the *write* path uses
+ * (`lib/changes.ts` normalizes `phone` before it patches a student row), so a
+ * stored number and a looked-up one always agree.
  */
-export function normalizePhone(raw: string): string {
-  const digits = raw.replace(/[^\d]/g, "")
-  if (!digits) return raw.trim()
-  return `+${digits.length === 10 ? `1${digits}` : digits}`
-}
+export { normalizePhone }

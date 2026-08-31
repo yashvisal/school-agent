@@ -11,7 +11,7 @@ import {
 import { fetchCanvasSnapshot } from "../lib/canvas/client"
 import { normalizeCanvas } from "../lib/canvas/normalize"
 import type { CanvasSnapshotPayload } from "../lib/canvas/types"
-import { diffState, hashPayload } from "../lib/diff"
+import { diffState, hashSnapshotPayload } from "../lib/diff"
 import {
   applyProposals,
   courseIdIndex,
@@ -158,7 +158,7 @@ export const poll = internalAction({
 
     try {
       const payload = await canvasPayloadFor(source.config)
-      const contentHash = await hashPayload(payload)
+      const contentHash = await hashSnapshotPayload(payload)
       const result: IngestResult = await ctx.runMutation(
         internal.ingest.canvas.ingestPayload,
         { sourceId: args.sourceId, payload, contentHash }

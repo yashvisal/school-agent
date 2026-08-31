@@ -1,3 +1,4 @@
+import { paginationOptsValidator, paginationResultValidator } from "convex/server"
 import { v } from "convex/values"
 
 import { internal } from "./_generated/api"
@@ -6,7 +7,13 @@ import { internalAction, internalMutation, internalQuery } from "./_generated/se
 import type { FeasibleActions } from "./lib/planner"
 import { DEFAULT_HORIZON_DAYS } from "./lib/planner"
 import { addDays, localDate, localParts } from "./lib/time"
-import { studentDocV, triggerStatusV } from "./lib/validators"
+import {
+  pendingAnnotationV,
+  planFeasibleV,
+  signalsDigestV,
+  studentDocV,
+  triggerStatusV,
+} from "./lib/validators"
 
 /**
  * Nightly precompute → Voice trigger (core.md, "Nightly precompute"; vision §6.1).
@@ -18,8 +25,10 @@ import { studentDocV, triggerStatusV } from "./lib/validators"
  *
  * Idempotency is layered, because the cron runs hourly and both ends can retry:
  * - `planRuns.operationId` (`nightly:<studentId>:<date>`) is unique per student-day;
- *   `storeRun` returns the existing row rather than making a second one.
+ *   `storeRun` refreshes the existing row rather than making a second one.
  * - A run already `triggered` never POSTs again.
+ * - A run that `failed` (eve down) or is stuck `pending` IS retried, by a later
+ *   tick within `RETRY_WINDOW_HOURS` of the student's nightly hour.
  * - eve's `POST /eve/v1/session` honours the same `operationId` for create-once
  *   semantics, so even a double POST returns the first session.
  *
@@ -61,16 +70,25 @@ const runResultV = v.object({
 // Reads
 // ---------------------------------------------------------------------------
 
-const MAX_ACTIVE_STUDENTS = 500
+/** One page of the active roster. Sized for a comfortable query, not a cap. */
+const STUDENT_PAGE_SIZE = 200
 
+/** Backstop on the cursor loop; 100 pages is 20k students. */
+const MAX_STUDENT_PAGES = 100
+
+/**
+ * Paginated, not `.take(N)`: a fixed cap silently drops every student past it
+ * from the nightly pass, and nothing records the truncation (CR 3892156231).
+ * `tick` walks the cursor to the end of the roster.
+ */
 export const activeStudents = internalQuery({
-  args: {},
-  returns: v.array(studentDocV),
-  handler: async (ctx) =>
+  args: { paginationOpts: paginationOptsValidator },
+  returns: paginationResultValidator(studentDocV),
+  handler: async (ctx, args) =>
     await ctx.db
       .query("students")
       .withIndex("by_status", (q) => q.eq("status", "active"))
-      .take(MAX_ACTIVE_STUDENTS),
+      .paginate(args.paginationOpts),
 })
 
 export const findRun = internalQuery({
@@ -80,6 +98,7 @@ export const findRun = internalQuery({
     v.object({
       planRunId: v.id("planRuns"),
       triggerStatus: triggerStatusV,
+      computedAt: v.number(),
       voiceSessionId: v.optional(v.string()),
     })
   ),
@@ -92,6 +111,7 @@ export const findRun = internalQuery({
     return {
       planRunId: run._id,
       triggerStatus: run.triggerStatus,
+      computedAt: run.computedAt,
       voiceSessionId: run.voiceSessionId,
     }
   },
@@ -114,9 +134,11 @@ export const storeRun = internalMutation({
     studentId: v.id("students"),
     date: v.string(),
     computedAt: v.number(),
-    feasible: v.any(),
-    pendingAnnotations: v.any(),
-    signalsDigest: v.any(),
+    // Validated at the write boundary, so a malformed snapshot is rejected here
+    // rather than surfacing later as a failed Voice read (CR 3892156235).
+    feasible: planFeasibleV,
+    pendingAnnotations: v.array(pendingAnnotationV),
+    signalsDigest: signalsDigestV,
   },
   returns: v.object({
     planRunId: v.id("planRuns"),
@@ -164,6 +186,55 @@ export const storeRun = internalMutation({
   },
 })
 
+/**
+ * Records a student the pass could not even date: an unusable `timezone` means
+ * no local hour and no "tomorrow", so there is no plan to compute. It is a data
+ * problem, and the fix is for someone to see it — a silent `continue` leaves a
+ * student who never gets a morning text and no trace of why (CR 3892156241).
+ * Keyed on the UTC day so one bad row produces one marker per day, not per tick.
+ */
+export const markUnusableTimezone = internalMutation({
+  args: {
+    studentId: v.id("students"),
+    date: v.string(),
+    computedAt: v.number(),
+    error: v.string(),
+  },
+  returns: v.id("planRuns"),
+  handler: async (ctx, args) => {
+    const operationId = operationIdFor(args.studentId, args.date)
+    const existing = await ctx.db
+      .query("planRuns")
+      .withIndex("by_operationId", (q) => q.eq("operationId", operationId))
+      .first()
+    if (existing) {
+      await ctx.db.patch("planRuns", existing._id, {
+        triggerStatus: "skipped",
+        error: args.error,
+      })
+      return existing._id
+    }
+    return await ctx.db.insert("planRuns", {
+      studentId: args.studentId,
+      date: args.date,
+      computedAt: args.computedAt,
+      feasible: { date: args.date, windows: [], options: [] },
+      pendingAnnotations: [],
+      signalsDigest: {
+        availability: [],
+        pacing: [],
+        preference: [],
+        difficulty: [],
+        life_event: [],
+        other: [],
+      },
+      operationId,
+      triggerStatus: "skipped",
+      error: args.error,
+    })
+  },
+})
+
 export const markTrigger = internalMutation({
   args: {
     planRunId: v.id("planRuns"),
@@ -186,51 +257,120 @@ export const markTrigger = internalMutation({
 // The pass
 // ---------------------------------------------------------------------------
 
+/** A run left `pending` this long was interrupted mid-flight; retry it. */
+export const STUCK_PENDING_MS = 60 * 60 * 1000
+
+/**
+ * How many hours after the nightly hour the pass keeps checking for a run to
+ * recover. Bounded so the extra `findRun` read is paid on a handful of ticks a
+ * day rather than all 24.
+ */
+export const RETRY_WINDOW_HOURS = 6
+
+/**
+ * Whether this tick should (re)start the pass for a student-day.
+ *
+ * `triggered` and `skipped` are terminal — the student either got their text or
+ * this deployment has no Voice to send one. A `failed` run is the whole point of
+ * running hourly: eve was down, and the next pass retries (CR 3892156113). A run
+ * still `pending` an hour later never reached its trigger and is retried too.
+ */
+function shouldRun(
+  existing: { triggerStatus: TriggerStatus; computedAt: number } | null,
+  now: number
+): boolean {
+  if (!existing) return true
+  if (existing.triggerStatus === "triggered" || existing.triggerStatus === "skipped") {
+    return false
+  }
+  if (existing.triggerStatus === "failed") return true
+  return now - existing.computedAt > STUCK_PENDING_MS
+}
+
 /**
  * Hourly. Every active student whose local clock just struck their nightly hour
- * and who has no run for tomorrow yet gets one. Hourly-and-idempotent rather
- * than one cron per timezone: timezones are per-student data, not deployment
- * config, and a missed hour self-heals on the next tick of the same local day.
+ * and whose run for tomorrow is missing, failed, or stuck gets one. Hourly-and-
+ * idempotent rather than one cron per timezone: timezones are per-student data,
+ * not deployment config.
+ *
+ * Each student's run is *scheduled*, not awaited: a slow or hanging eve trigger
+ * for one student must not delay or starve the rest of the roster in the same
+ * tick (CR 3892161920). `planRuns.operationId` still makes a double tick a no-op.
  */
 export const tick = internalAction({
   args: { now: v.optional(v.number()) },
   returns: v.object({ considered: v.number(), started: v.number() }),
   handler: async (ctx, args): Promise<{ considered: number; started: number }> => {
     const now = args.now ?? Date.now()
-    const students: Doc<"students">[] = await ctx.runQuery(
-      internal.nightly.activeStudents,
-      {}
-    )
 
+    let considered = 0
     let started = 0
-    for (const student of students) {
-      let hour: number
-      let date: string
-      try {
-        hour = localParts(now, student.timezone).hour
-        date = addDays(localDate(now, student.timezone), 1)
-      } catch {
-        continue // an unusable timezone is a data problem, not a reason to stall
+    let cursor: string | null = null
+
+    for (let page = 0; page < MAX_STUDENT_PAGES; page++) {
+      const roster: {
+        page: Doc<"students">[]
+        isDone: boolean
+        continueCursor: string
+      } = await ctx.runQuery(internal.nightly.activeStudents, {
+        paginationOpts: { numItems: STUDENT_PAGE_SIZE, cursor },
+      })
+      considered += roster.page.length
+
+      for (const student of roster.page) {
+        let hour: number
+        let date: string
+        try {
+          hour = localParts(now, student.timezone).hour
+          date = addDays(localDate(now, student.timezone), 1)
+        } catch (error) {
+          // A data problem, not a reason to stall — but it is recorded, so a
+          // student who silently never gets a text is discoverable.
+          console.error(
+            `nightly: student ${student._id} has an unusable timezone ${JSON.stringify(
+              student.timezone
+            )}`,
+            error
+          )
+          await ctx.runMutation(internal.nightly.markUnusableTimezone, {
+            studentId: student._id,
+            date: localDate(now, "UTC"),
+            computedAt: now,
+            error: `unusable timezone: ${student.timezone}`,
+          })
+          continue
+        }
+        // A first run starts exactly on the student's local nightly hour. For
+        // the few hours after it, the pass still *looks* — but only to retry a
+        // run that failed or got stuck, never to start a day's first one late.
+        const nightlyHour = student.nightlyHourLocal ?? DEFAULT_NIGHTLY_HOUR
+        const hoursSince = hour - nightlyHour
+        if (hoursSince < 0 || hoursSince > RETRY_WINDOW_HOURS) continue
+
+        const existing: {
+          planRunId: Id<"planRuns">
+          triggerStatus: TriggerStatus
+          computedAt: number
+          voiceSessionId?: string
+        } | null = await ctx.runQuery(internal.nightly.findRun, {
+          operationId: operationIdFor(student._id, date),
+        })
+        if (hoursSince > 0 && !existing) continue // late tick, nothing to recover
+        if (!shouldRun(existing, now)) continue
+
+        await ctx.scheduler.runAfter(0, internal.nightly.runForStudent, {
+          studentId: student._id,
+          date,
+          now,
+        })
+        started++
       }
-      if (hour !== (student.nightlyHourLocal ?? DEFAULT_NIGHTLY_HOUR)) continue
 
-      const existing: {
-        planRunId: Id<"planRuns">
-        triggerStatus: TriggerStatus
-        voiceSessionId?: string
-      } | null = await ctx.runQuery(internal.nightly.findRun, {
-        operationId: operationIdFor(student._id, date),
-      })
-      if (existing) continue
-
-      await ctx.runAction(internal.nightly.runForStudent, {
-        studentId: student._id,
-        date,
-        now,
-      })
-      started++
+      if (roster.isDone) break
+      cursor = roster.continueCursor
     }
-    return { considered: students.length, started }
+
+    return { considered, started }
   },
 })
 
@@ -334,6 +474,9 @@ export const runNow = internalAction({
 // eve session trigger
 // ---------------------------------------------------------------------------
 
+/** How long the eve session POST may take before it is a failure. */
+export const EVE_TRIGGER_TIMEOUT_MS = 15_000
+
 type TriggerOutcome = {
   triggerStatus: "triggered" | "failed" | "skipped"
   voiceSessionId?: string
@@ -359,6 +502,12 @@ async function triggerVoice(args: {
     return { triggerStatus: "skipped", error: "EVE_VOICE_URL not set" }
   }
   const token = process.env.EVE_VOICE_TOKEN
+  // Fails closed, like `checkBearer` on the way in: a deployment that set the URL
+  // but forgot the token must not POST a student's trigger unauthenticated and
+  // then present a config mistake as a transport failure (CR 3892156246).
+  if (!token) {
+    return { triggerStatus: "skipped", error: "EVE_VOICE_TOKEN not set" }
+  }
 
   const operationId = operationIdFor(args.studentId, args.date)
   const message = `nightly_plan studentId=${args.studentId} date=${args.date} planRunId=${args.planRunId}`
@@ -368,9 +517,14 @@ async function triggerVoice(args: {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        ...(token ? { authorization: `Bearer ${token}` } : {}),
+        authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({ message, operationId }),
+      // An application-level deadline: an eve that accepts the connection and
+      // never answers must not hold a scheduled run open (CR 3892156254). A
+      // timeout aborts the fetch and is recorded as `failed`, so the next
+      // hourly pass retries it.
+      signal: AbortSignal.timeout(EVE_TRIGGER_TIMEOUT_MS),
     })
 
     const text = await response.text()

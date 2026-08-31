@@ -147,6 +147,44 @@ describe("the Canvas feed fixture", () => {
   })
 })
 
+describe("nested sub-components", () => {
+  const withAlarm = [
+    "BEGIN:VCALENDAR",
+    "BEGIN:VEVENT",
+    "UID:event-assignment-7001",
+    "SUMMARY:Problem Set 4 [CS201]",
+    "DESCRIPTION:Submit the writeup on Gradescope.",
+    "DTSTART:20261110T045900Z",
+    "BEGIN:VALARM",
+    "ACTION:DISPLAY",
+    "TRIGGER:-PT1H",
+    "SUMMARY:Reminder: final exam review",
+    "DESCRIPTION:Event reminder",
+    "END:VALARM",
+    "END:VEVENT",
+    "END:VCALENDAR",
+  ].join("\r\n")
+
+  test("a VALARM's own SUMMARY/DESCRIPTION never overwrite the event's", () => {
+    const [event] = parseIcs(withAlarm)
+    expect(event.summary).toBe("Problem Set 4 [CS201]")
+    expect(event.description).toBe("Submit the writeup on Gradescope.")
+    // The alarm's properties are not the event's properties either.
+    expect(event.properties.map((p) => p.name)).not.toContain("ACTION")
+    expect(event.properties.map((p) => p.name)).not.toContain("TRIGGER")
+  })
+
+  test("the alarm text cannot leak into the deadline or change its kind", () => {
+    const { deadlines } = normalizeIcal(withAlarm, "https://feed.example")
+    expect(deadlines).toHaveLength(1)
+    expect(deadlines[0].title).toBe("Problem Set 4")
+    expect(deadlines[0].description).toBe("Submit the writeup on Gradescope.")
+    // "final exam review" in the VALARM would otherwise make this an exam.
+    expect(deadlines[0].kind).toBe("other")
+    expect(deadlines[0].dueAt).toBe(Date.UTC(2026, 10, 10, 4, 59))
+  })
+})
+
 describe("a non-Canvas feed", () => {
   const { deadlines, classEvents } = normalizeIcal(genericIcs, "https://planner.example")
 

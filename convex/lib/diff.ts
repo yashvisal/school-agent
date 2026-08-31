@@ -3,6 +3,7 @@ import type {
   NormalizedCourse,
   NormalizedDeadline,
   NormalizedState,
+  SubmissionStatus,
 } from "./normalized"
 
 /**
@@ -90,6 +91,22 @@ const byKey = <T extends { key: string }>(items: T[]) =>
 const sameNumber = (a: number | undefined, b: number | undefined) =>
   a === undefined ? b === undefined : b !== undefined && a === b
 
+/** Nothing has been handed in yet — the work is still the student's to do. */
+const OPEN_SUBMISSION: ReadonlySet<SubmissionStatus> = new Set<SubmissionStatus>([
+  "unsubmitted",
+  "unknown",
+])
+
+/**
+ * A submission that went BACKWARDS: a submission deleted, a resubmission window
+ * reopened, a grade retracted. The work is the student's again, so this has to
+ * reach the row — `submitted`/`grade_posted` would both read as progress.
+ */
+function isReopening(before: SubmissionStatus, next: SubmissionStatus): boolean {
+  if (OPEN_SUBMISSION.has(next) && !OPEN_SUBMISSION.has(before)) return true
+  return next === "submitted" && before === "graded"
+}
+
 /**
  * One proposal per *fact that changed*, not one per document: a poll that both
  * moves a due date and posts a grade is two separate things worth telling the
@@ -150,8 +167,31 @@ export function diffDeadlines(
       })
     }
 
+    // Status transitions. The final `else if` is the catch-all that matters
+    // most: a submission that REGRESSES (submitted → unsubmitted after a
+    // deletion, graded → submitted after a grade is retracted) must still emit
+    // a proposal, or the stored row keeps `submissionStatus: "submitted"` and a
+    // stale score, and the planner drops the work from every future plan.
     const statusChanged = before.submissionStatus !== deadline.submissionStatus
-    if (statusChanged && deadline.submissionStatus === "submitted") {
+    if (statusChanged && isReopening(before.submissionStatus, deadline.submissionStatus)) {
+      proposals.push({
+        ...base,
+        kind: "deadline_updated",
+        before: toDeadlineFields(before),
+        // A reopened submission must also CLEAR fields the source no longer
+        // asserts — `null` here means "unset" to the apply layer (pickDeadline
+        // in lib/changes.ts); omitting the key would leave a stale score.
+        after: {
+          ...after,
+          ...(before.score !== undefined && deadline.score === undefined
+            ? { score: null }
+            : {}),
+        },
+        reason:
+          `Submission reopened: status went from ${before.submissionStatus} ` +
+          `back to ${deadline.submissionStatus}`,
+      })
+    } else if (statusChanged && deadline.submissionStatus === "submitted") {
       proposals.push({
         ...base,
         kind: "submitted",
@@ -173,6 +213,16 @@ export function diffDeadlines(
       (deadline.submissionStatus === "missing" ||
         deadline.submissionStatus === "excused")
     ) {
+      proposals.push({
+        ...base,
+        kind: "deadline_updated",
+        before: toDeadlineFields(before),
+        after,
+        reason: `Submission status is now ${deadline.submissionStatus}`,
+      })
+    } else if (statusChanged || !sameNumber(before.score, deadline.score)) {
+      // Anything left over — an unusual transition, or a score that moved
+      // without the status moving. Still a fact worth applying.
       proposals.push({
         ...base,
         kind: "deadline_updated",
@@ -315,4 +365,21 @@ export async function hashPayload(value: unknown): Promise<string> {
   let out = ""
   for (const byte of view) out += HEX[byte >> 4] + HEX[byte & 15]
   return out
+}
+
+/**
+ * The hash `snapshots.contentHash` stores — the payload with `fetchedAt`
+ * NEUTRALIZED.
+ *
+ * `fetchedAt` is when we looked, not what the source said. Hashing it makes
+ * every poll of an unchanged source hash differently, which would insert a full
+ * snapshot row every 30 minutes and quietly break core.md's "stored only when
+ * the hash changes" rule. It stays on the snapshot ROW (and inside the payload)
+ * — it just does not participate in identity.
+ */
+export async function hashSnapshotPayload(payload: unknown): Promise<string> {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return await hashPayload(payload)
+  }
+  return await hashPayload({ ...(payload as Record<string, unknown>), fetchedAt: 0 })
 }

@@ -17,7 +17,7 @@ all `internal*`).
 **Base URL** is the Convex deployment's **HTTP Actions** URL — the `.convex.site`
 host, *not* the `.convex.cloud` one used by the client SDK:
 
-```
+```text
 https://<deployment>.convex.site
 ```
 
@@ -46,7 +46,8 @@ prod have different values; the secret never appears in the repo.
 | `400` | Malformed JSON, a non-object body, a missing/ill-typed field, or an id that is not a valid Convex id for its table. |
 | `401` | Missing, malformed, or wrong bearer token — or `CORE_AGENT_SECRET` unset on the deployment. |
 | `404` | The route does not exist, or the subject (student) was not found. |
-| `500` | An unexpected server error. Should not happen for a well-formed request; report it. |
+| `409` | The request is ambiguous and Core will not guess — e.g. two students share the inbound phone number. |
+| `500` | An unexpected server error. The body is always exactly `{"ok": false, "error": "internal error"}` — details are logged server-side, never returned. Should not happen for a well-formed request; report it. |
 
 Error bodies are always `{ "ok": false, "error": "<message>" }`.
 
@@ -99,6 +100,9 @@ decides what to do about it.
 **Response `404`** — no student for that identifier. Never fall back to another
 student.
 
+**Response `409`** — more than one student carries that number. Core refuses to
+pick one; the number is a data problem for a human to fix. Do not retry.
+
 ---
 
 ## 3. `POST /voice/getFeasibleActions` — *read the plan*
@@ -149,9 +153,18 @@ each option annotated with plain-English facts.
 
 ### Caching and `planRunId`
 
-If the nightly pass computed a plan for that day within the last **6 hours**, that
-stored snapshot is returned with `cached: true` and its `planRunId`. Otherwise the
-plan is recomputed live (`cached: false`).
+If the nightly pass computed a plan for that day within the last **6 hours**, and
+nothing has landed in `changes` since it was computed, that stored snapshot is
+returned with `cached: true` and its `planRunId`.
+
+Otherwise the plan is recomputed live and comes back with `cached: false` and
+**no `planRunId` at all**. A live plan did not come from a stored run, so there is
+no snapshot for it to cite: if `planRunId` is absent, do not name one.
+
+A change *created* or *resolved* since the snapshot invalidates it — including one
+you just applied yourself with `confirmedInline: true`. Calling
+`getFeasibleActions` again straight after a `proposeChange` therefore gives you
+the corrected day, not the stale one.
 
 This matters for the nightly run: the trigger message carries a `planRunId`, and
 calling `getFeasibleActions` for the same `date` returns that same snapshot — so
@@ -190,13 +203,26 @@ free-standing task.
 | `facts` | string[] | Plain English. **These are what you weigh.** |
 | `pending` | string[]? | Unconfirmed changes touching this item. See §6. |
 | `signals` | string[]? | Signal texts referencing this course/deadline/task. |
+| `overdue` | true? | Past due and still not handed in. See below. |
+
+### `overdue`
+
+Work whose due time has passed and whose `submissionStatus` is still open is
+emitted with `overdue: true`, `fits: []`, and `remainingWindowsBeforeDue: 0`, and
+a fact of the form `"past due Fri Sep 11 12pm (3 days ago), not submitted"`. It is
+in the set so you can *raise the miss* — silence about a missed deadline is worse
+than the mention. There is nothing to schedule: the hard guarantee below still
+holds, because there is no window after the due time and so no fit to offer.
+
+Anything more than 14 days past due is dropped entirely, as is anything
+submitted, graded, or excused.
 
 **There is no score, rank, priority, or importance field, and there never will
 be.** The deterministic layer says what is *possible*; choosing among the options
 is the whole of your job (vision §10). The `facts` array is the input to that
 judgement — e.g.:
 
-```
+```text
 "Compsci 201 (CS201)"
 "due Thu Sep 17 11:59pm (in 3 days)"
 "worth 25 pts in Problem Sets (30% of grade)"
@@ -212,7 +238,8 @@ Core enforces these, so you may state them to the student as fact:
 
 1. No `fits` slot overlaps a class block.
 2. No `fits` slot ends after `dueAt`.
-3. Submitted, graded, excused, and removed work is never in `options`.
+3. Submitted, graded, excused, and removed work is never in `options`. Past-due
+   *unsubmitted* work is, flagged `overdue` and with no fits.
 4. Anything in `options` is planned on **applied** facts only — never on an
    unconfirmed pending value.
 
@@ -251,18 +278,37 @@ there; you never write a deadline, task, or course directly.
 | `after` | usually | The new values. Omit for `deadline_removed`. |
 | `before` | no | The prior values, for the change feed. |
 | `courseId` | no | Required for `deadline_added` if `after.courseId` is absent. |
-| `origin` | no | **Defaults to `chat`.** Do not set it to `canvas` or `ical` — Voice is not an authoritative source. |
 | `reason` | no | Free text, shown in the change feed. Worth filling in. |
 | `conflict` | no | Set `true` when what the student said contradicts a structured source. |
 | `confirmedInline` | no | See below. |
 
+**There is no `origin` field.** Everything Voice proposes is `chat` origin by
+construction — it was interpreted from a message, and the route will reject a
+payload that tries to say otherwise. Two consequences worth knowing:
+
+- **A Voice change is never `tier: "auto"`.** It is `needs_approval`, always,
+  and reaches student state only through `confirmedInline` or a web tap.
+- **You cannot set `after.provenance`.** Whatever you put there is replaced with
+  `{ source: "chat", sourceRef: <changeId>, confidence: 0.5 }` on apply, so a
+  fact you heard can never be recorded as a fact Canvas stated.
+
+**Scope on `entity.table: "students"`:** a chat-origin change may write only
+`classBlocks`, `availability`, `semesterStart`, `semesterEnd`, and
+`nightlyHourLocal`. `phone`, `timezone`, `status`, and `clerkId` are identity and
+routing; they are silently dropped from the patch. And `entity.id` must be the
+same student as `studentId` — a change can only ever touch its own student, on
+any table. Anything else is a `403`.
+
 **Response `200`**
 
 ```json
-{ "ok": true, "changeId": "p44e...", "status": "pending", "tier": "needs_approval" }
+{ "ok": true, "changeId": "p44e...", "status": "approved", "tier": "needs_approval" }
 ```
 
-`status` is `applied | pending | approved`; `tier` is `auto | needs_approval`.
+`status` is `applied | pending | approved`; `tier` is `auto | needs_approval`. The
+example above is the response to the request above it: `confirmedInline: true`, so
+it lands `approved` and is applied. Without it, the same request answers
+`"status": "pending"`.
 
 ### `confirmedInline` — the rule that matters
 
@@ -281,7 +327,9 @@ Set it **only** when the student actually confirmed in that same exchange:
 Do not set it because a statement sounded confident. An unconfirmed inference is
 `pending`; that is the whole safety property.
 
-A `conflict: true` change is never auto-applied, regardless of origin.
+A `conflict: true` change is never auto-applied. (Nothing from Voice ever is;
+`conflict` matters for the adapters, and marking it tells the feed *why* the
+change is waiting.)
 
 ---
 
@@ -354,15 +402,15 @@ The matching option also carries a human-readable
 
 The rules (core.md, "Approval channels and pending semantics"):
 
-3. **The plan is computed on applied facts only.** An option touched by a pending
-   change is annotated, never silently planned on the new value and never silently
-   dropped.
-4. **You drain the queue proactively.** When something pending would affect the
-   plan, ask for a one-word confirmation in the morning text — that is the point
-   of surfacing it. On a "yeah", call `proposeChange` with the same
-   `entity`/`after` and `confirmedInline: true`.
-5. Pending changes older than the horizon are expired by the nightly pass, with a
-   note in the feed. They are never applied.
+- **Rule 3 — the plan is computed on applied facts only.** An option touched by a
+  pending change is annotated, never silently planned on the new value and never
+  silently dropped.
+- **Rule 4 — you drain the queue proactively.** When something pending would
+  affect the plan, ask for a one-word confirmation in the morning text — that is
+  the point of surfacing it. On a "yeah", call `proposeChange` with the same
+  `entity`/`after` and `confirmedInline: true`.
+- **Rule 5 — pending changes older than the horizon are expired** by the nightly
+  pass, with a note in the feed. They are never applied.
 
 The web approval queue exists only for what chat could not confirm in flow (bulk
 syllabus parses at onboarding, schedule uploads, source conflicts).
@@ -404,7 +452,9 @@ Negative or non-finite token counts are floored to `0` rather than stored.
 
 Every hour, Core's cron (`crons.ts` → `internal.nightly.tick`) finds each active
 student whose **local** clock just struck their nightly hour (`nightlyHourLocal`,
-default `4`) and who has no plan run for tomorrow yet. For each, it expires stale
+default `4`) and who has no plan run for tomorrow yet — plus, for the six hours
+after that, any student whose run for tomorrow `failed` or is stuck. For each, it
+expires stale
 pending changes, computes tomorrow's plan, stores it as a `planRuns` row, and then
 starts a Voice session:
 
@@ -445,10 +495,10 @@ Core reads `sessionId` from the 2xx response body and stores it on the run.
 
 | Value | Meaning |
 |---|---|
-| `pending` | Plan stored, not yet sent. |
-| `triggered` | eve accepted the session. |
-| `failed` | eve returned non-2xx, or the request errored. Retried by the next pass. |
-| `skipped` | `EVE_VOICE_URL` is unset on this deployment. Expected on dev deployments with no Voice attached; the plan is still computed and stored. |
+| `pending` | Plan stored, not yet sent. A run still `pending` an hour later is treated as stuck and retried. |
+| `triggered` | eve accepted the session. Terminal — never re-sent. |
+| `failed` | eve returned non-2xx, timed out (15s), or the request errored. Retried by a later tick, up to 6 hours after the student's nightly hour. |
+| `skipped` | `EVE_VOICE_URL` or `EVE_VOICE_TOKEN` is unset on this deployment, or the student's timezone is unusable. Expected on dev deployments with no Voice attached; the plan is still computed and stored. Terminal for that student-day. |
 
 ### Manual trigger
 
@@ -471,7 +521,7 @@ deployment — dev and prod do not share values:
 |---|---|
 | `CORE_AGENT_SECRET` | The bearer token every route above requires. Voice needs the same value in its own environment. |
 | `EVE_VOICE_URL` | Base URL of the deployed Voice agent, e.g. `https://voice.example.com`. Unset → nightly runs are `skipped`. |
-| `EVE_VOICE_TOKEN` | Bearer token for eve's session route. Required for `operationId` create-once — eve rejects `operationId` from anonymous callers. |
+| `EVE_VOICE_TOKEN` | Bearer token for eve's session route. Required for `operationId` create-once — eve rejects `operationId` from anonymous callers. Unset while `EVE_VOICE_URL` is set → the run is `skipped` with that reason; Core never POSTs a trigger unauthenticated. |
 
 ---
 

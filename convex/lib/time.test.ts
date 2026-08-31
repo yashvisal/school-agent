@@ -161,6 +161,14 @@ describe("formatting", () => {
     expect(formatClock(9 * 60 + 30)).toBe("9:30am")
   })
 
+  test("formatClock tells the end of the day from the start of it", () => {
+    // 1440 is the planner's day cutoff. "9am–12am" would read backwards.
+    expect(formatClock(1440)).toBe("midnight")
+    expect(formatClock(0)).toBe("12am")
+    // Only the exact end-of-day minute; a wrapped value still reads normally.
+    expect(formatClock(1500)).toBe("1am")
+  })
+
   test("formatDuration", () => {
     expect(formatDuration(45)).toBe("45m")
     expect(formatDuration(120)).toBe("2h")

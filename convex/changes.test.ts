@@ -360,6 +360,280 @@ describe("expireStale", () => {
   })
 })
 
+describe("tenancy — a change may only ever touch its own student", () => {
+  /** A second student with their own course and deadline. */
+  async function seedOther(t: ReturnType<typeof setupTest>) {
+    return await t.run(async (ctx) => {
+      const studentId = await ctx.db.insert("students", {
+        clerkId: "user_test_stranger",
+        timezone: "America/New_York",
+        classBlocks: [],
+        availability: { weekly: [], exceptions: [] },
+        status: "active",
+      })
+      const courseId = await ctx.db.insert("courses", {
+        studentId,
+        name: "Their course",
+        sourceRefs: {},
+        status: "active",
+        provenance: { source: "canvas", sourceRef: "courses/2002", confidence: 1 },
+      })
+      const deadlineId = await ctx.db.insert("deadlines", {
+        studentId,
+        courseId,
+        title: "Their pset",
+        kind: "homework",
+        dueAt: Date.UTC(2026, 8, 20, 3, 59),
+        submissionStatus: "unsubmitted",
+        externalIds: {},
+        provenance: { source: "canvas", sourceRef: "assignments/9", confidence: 1 },
+        status: "active",
+      })
+      return { studentId, courseId, deadlineId }
+    })
+  }
+
+  test("a change naming another student's deadline throws and writes nothing", async () => {
+    const t = setupTest()
+    const { studentId, courseId } = await seed(t)
+    const other = await seedOther(t)
+
+    await expect(
+      t.mutation(internal.changes.propose, {
+        studentId,
+        courseId,
+        kind: "deadline_moved",
+        entity: { table: "deadlines", id: other.deadlineId },
+        after: { dueAt: Date.UTC(2027, 0, 1) },
+        origin: "canvas",
+      })
+    ).rejects.toThrow(/403/)
+
+    const { theirs, changes } = await t.run(async (ctx) => ({
+      theirs: await ctx.db.get("deadlines", other.deadlineId),
+      changes: await ctx.db.query("changes").take(10),
+    }))
+    // The whole mutation rolled back: their row is untouched, and the change
+    // row that would have recorded the attempt was never committed either.
+    expect(theirs?.dueAt).toBe(Date.UTC(2026, 8, 20, 3, 59))
+    expect(changes).toHaveLength(0)
+  })
+
+  test("an insert under another student's course throws and writes nothing", async () => {
+    const t = setupTest()
+    const { studentId } = await seed(t)
+    const other = await seedOther(t)
+
+    await expect(
+      t.mutation(internal.changes.propose, {
+        studentId,
+        kind: "deadline_added",
+        entity: { table: "deadlines" },
+        after: deadlineAfter(other.courseId, { title: "Smuggled in" }),
+        origin: "canvas",
+      })
+    ).rejects.toThrow(/403/)
+
+    // Only the other student's own seeded deadline remains; nothing was created.
+    const deadlines = await t.run(async (ctx) => ctx.db.query("deadlines").take(100))
+    expect(deadlines.map((d) => d.studentId)).toEqual([other.studentId])
+  })
+
+  test("a chat_decision cannot patch another student's row", async () => {
+    const t = setupTest()
+    const { studentId } = await seed(t)
+    const other = await seedOther(t)
+
+    await expect(
+      t.mutation(internal.changes.propose, {
+        studentId,
+        kind: "chat_decision",
+        entity: { table: "students", id: other.studentId },
+        after: { nightlyHourLocal: 23 },
+        origin: "chat",
+        confirmedInline: true,
+      })
+    ).rejects.toThrow(/403/)
+
+    const them = await t.run((ctx) => ctx.db.get("students", other.studentId))
+    expect(them?.nightlyHourLocal).toBeUndefined()
+  })
+
+  test("a chat change reaches the schedule fields and nothing else", async () => {
+    const t = setupTest()
+    const { studentId } = await seed(t)
+
+    await t.mutation(internal.changes.propose, {
+      studentId,
+      kind: "availability_updated",
+      entity: { table: "students", id: studentId },
+      after: {
+        // allowed
+        nightlyHourLocal: 6,
+        semesterEnd: "2026-12-18",
+        classBlocks: [{ dayOfWeek: 1, startMin: 600, endMin: 675 }],
+        // identity and routing — an interpreted sentence must not move these
+        phone: "+15550000000",
+        status: "paused",
+        timezone: "Pacific/Auckland",
+        clerkId: "user_someone_else",
+      },
+      origin: "chat",
+      confirmedInline: true,
+    })
+
+    const student = await t.run((ctx) => ctx.db.get("students", studentId))
+    expect(student?.nightlyHourLocal).toBe(6)
+    expect(student?.semesterEnd).toBe("2026-12-18")
+    expect(student?.classBlocks).toHaveLength(1)
+    expect(student?.phone).toBeUndefined()
+    expect(student?.status).toBe("active")
+    expect(student?.timezone).toBe("America/New_York")
+    expect(student?.clerkId).toBe(CLERK_ID)
+  })
+
+  test("a manual change may set the phone, and it is normalized on the way in", async () => {
+    const t = setupTest()
+    const { studentId } = await seed(t)
+
+    await t.mutation(internal.changes.propose, {
+      studentId,
+      kind: "availability_updated",
+      entity: { table: "students", id: studentId },
+      after: { phone: "(555) 123-4567" },
+      origin: "manual",
+      confirmedInline: true,
+    })
+
+    const student = await t.run((ctx) => ctx.db.get("students", studentId))
+    // Stored in the same form `resolveStudent` looks up by.
+    expect(student?.phone).toBe("+15551234567")
+  })
+})
+
+describe("provenance", () => {
+  test("an interpreted change cannot claim a structured source", async () => {
+    const t = setupTest()
+    const { studentId, courseId } = await seed(t)
+
+    const { changeId } = await t.mutation(internal.changes.propose, {
+      studentId,
+      courseId,
+      kind: "deadline_added",
+      entity: { table: "deadlines" },
+      after: deadlineAfter(courseId, {
+        title: "Heard in chat",
+        provenance: { source: "canvas", sourceRef: "assignments/5001", confidence: 1 },
+      }),
+      origin: "chat",
+      confirmedInline: true,
+    })
+
+    const deadlines = await t.run(async (ctx) => ctx.db.query("deadlines").take(10))
+    expect(deadlines[0].provenance).toEqual({
+      source: "chat",
+      sourceRef: changeId,
+      confidence: 0.5,
+    })
+  })
+
+  test("an authoritative source keeps the provenance it supplied", async () => {
+    const t = setupTest()
+    const { studentId, courseId } = await seed(t)
+
+    await t.mutation(internal.changes.propose, {
+      studentId,
+      courseId,
+      kind: "deadline_added",
+      entity: { table: "deadlines" },
+      after: deadlineAfter(courseId),
+      origin: "canvas",
+    })
+
+    const deadlines = await t.run(async (ctx) => ctx.db.query("deadlines").take(10))
+    expect(deadlines[0].provenance).toMatchObject({
+      source: "canvas",
+      sourceRef: "assignments/5001",
+      confidence: 1,
+    })
+  })
+})
+
+describe("clearing a field", () => {
+  test("a reopened submission drops the score it was graded with", async () => {
+    const t = setupTest()
+    const { studentId, courseId } = await seed(t)
+
+    const added = await t.mutation(internal.changes.propose, {
+      studentId,
+      courseId,
+      kind: "deadline_added",
+      entity: { table: "deadlines" },
+      after: deadlineAfter(courseId, {
+        submissionStatus: "graded",
+        score: 18,
+      }),
+      origin: "canvas",
+    })
+    const deadlineId = (await t.run((ctx) => ctx.db.get("changes", added.changeId)))!
+      .entity.id! as Id<"deadlines">
+    expect(await t.run((ctx) => ctx.db.get("deadlines", deadlineId))).toMatchObject({
+      score: 18,
+    })
+
+    // The grade is retracted upstream: the field is gone, which arrives as an
+    // explicit null (Convex values cannot be `undefined` on the wire).
+    await t.mutation(internal.changes.propose, {
+      studentId,
+      courseId,
+      kind: "deadline_updated",
+      entity: { table: "deadlines", id: deadlineId },
+      after: deadlineAfter(courseId, {
+        submissionStatus: "unsubmitted",
+        score: null,
+      }),
+      origin: "canvas",
+      reason: "Submission reopened",
+    })
+
+    const deadline = await t.run((ctx) => ctx.db.get("deadlines", deadlineId))
+    expect(deadline?.submissionStatus).toBe("unsubmitted")
+    // Not a stale 18/20 on work the student now has to redo.
+    expect(deadline?.score).toBeUndefined()
+  })
+
+  test("null never clears a required field — it fails loudly instead", async () => {
+    const t = setupTest()
+    const { studentId, courseId } = await seed(t)
+
+    const added = await t.mutation(internal.changes.propose, {
+      studentId,
+      courseId,
+      kind: "deadline_added",
+      entity: { table: "deadlines" },
+      after: deadlineAfter(courseId),
+      origin: "canvas",
+    })
+    const deadlineId = (await t.run((ctx) => ctx.db.get("changes", added.changeId)))!
+      .entity.id! as Id<"deadlines">
+
+    await expect(
+      t.mutation(internal.changes.propose, {
+        studentId,
+        courseId,
+        kind: "deadline_updated",
+        entity: { table: "deadlines", id: deadlineId },
+        after: { title: null },
+        origin: "canvas",
+      })
+    ).rejects.toThrow()
+
+    expect(
+      (await t.run((ctx) => ctx.db.get("deadlines", deadlineId)))?.title
+    ).toBe("Pset 3")
+  })
+})
+
 describe("authorization", () => {
   test("another identity cannot read or approve this student's changes", async () => {
     const t = setupTest()

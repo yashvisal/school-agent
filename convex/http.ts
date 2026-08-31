@@ -9,6 +9,7 @@ import {
   asObject,
   asString,
   checkBearer,
+  codedError,
   errorResponse,
   jsonResponse,
   readJsonObject,
@@ -31,18 +32,27 @@ import {
 const http = httpRouter()
 
 /**
- * Maps a thrown error to a status. Convex throws `ArgumentValidationError` when
- * a client-supplied id is malformed or points at the wrong table, which must
- * surface as a clean 400 rather than an opaque 500.
+ * Maps a thrown error to a status.
+ *
+ * Two recognised shapes: Convex's `ArgumentValidationError`, thrown when a
+ * client-supplied id is malformed or points at the wrong table (a clean 400, not
+ * an opaque 500), and Core's own `NNN: message` convention, parsed by
+ * `codedError`.
+ *
+ * **Anything else is a 500 with a fixed body.** An unrecognised error is by
+ * definition one we did not design for, and echoing its message hands the caller
+ * internal detail — table names, ids, stack fragments — for no operational gain.
+ * It is logged instead, where it is actually useful (CR 3892161906).
  */
-function errorToResponse(error: unknown): Response {
+function errorToResponse(error: unknown, route: string): Response {
   const message = error instanceof Error ? error.message : String(error)
   if (/ArgumentValidationError|Validator error|ArgumentValidation/i.test(message)) {
     return errorResponse(400, message)
   }
-  const coded = /^(400|401|403|404|409):\s*(.*)$/.exec(message)
-  if (coded) return errorResponse(Number(coded[1]), coded[2] || message)
-  return errorResponse(500, message)
+  const coded = codedError(error)
+  if (coded) return errorResponse(coded.status, coded.message)
+  console.error(`http ${route}: unhandled error`, error)
+  return errorResponse(500, "internal error")
 }
 
 /** Auth, then a JSON object body. Returns the body or the Response to send. */
@@ -82,7 +92,7 @@ http.route({
       })
       return jsonResponse({ ok: true, plan })
     } catch (error) {
-      return errorToResponse(error)
+      return errorToResponse(error, "/voice/getFeasibleActions")
     }
   }),
 })
@@ -113,7 +123,7 @@ http.route({
       })
       return jsonResponse({ ok: true, ...result })
     } catch (error) {
-      return errorToResponse(error)
+      return errorToResponse(error, "/voice/proposeChange")
     }
   }),
 })
@@ -142,7 +152,7 @@ http.route({
       })
       return jsonResponse({ ok: true, signalId })
     } catch (error) {
-      return errorToResponse(error)
+      return errorToResponse(error, "/voice/recordSignal")
     }
   }),
 })
@@ -180,7 +190,7 @@ http.route({
       })
       return jsonResponse({ ok: true, usageId })
     } catch (error) {
-      return errorToResponse(error)
+      return errorToResponse(error, "/voice/logUsage")
     }
   }),
 })
@@ -210,7 +220,7 @@ http.route({
       if (!student) return errorResponse(404, "no student for that identifier")
       return jsonResponse({ ok: true, ...student })
     } catch (error) {
-      return errorToResponse(error)
+      return errorToResponse(error, "/voice/resolveStudent")
     }
   }),
 })

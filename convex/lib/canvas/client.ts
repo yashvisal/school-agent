@@ -53,9 +53,23 @@ export type CanvasClientOptions = {
   maxRetries?: number
 }
 
+/**
+ * Hard ceiling on pages per endpoint. At `perPage: 100` that is 5,000 items —
+ * far past any real course — so hitting it means the feed is pathological or
+ * `rel="next"` is looping, and the source is marked unhealthy rather than
+ * burning the whole action budget.
+ */
+export const MAX_PAGES = 50
+
+/**
+ * Per-request wall clock. A stalled host would otherwise hold the action until
+ * the platform limit, delaying every later poll in the same run.
+ */
+export const REQUEST_TIMEOUT_MS = 30_000
+
 const DEFAULTS = {
   perPage: 100,
-  maxPages: 50,
+  maxPages: MAX_PAGES,
   rateLimitFloor: 100,
   maxRetries: 4,
 } as const
@@ -63,7 +77,11 @@ const DEFAULTS = {
 const defaultSleep: SleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const defaultFetch: FetchFn = (url, init) =>
-  fetch(url, { method: "GET", headers: init.headers })
+  fetch(url, {
+    method: "GET",
+    headers: init.headers,
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  })
 
 export class CanvasError extends Error {
   constructor(
@@ -195,6 +213,7 @@ export async function fetchAll<T>(
   const out: T[] = []
   const seen = new Set<string>()
   let url: string | undefined = buildUrl(baseUrl, path, params, perPage)
+  const firstUrl = url
 
   for (let page = 0; page < maxPages && url; page++) {
     if (seen.has(url)) break
@@ -209,6 +228,19 @@ export async function fetchAll<T>(
     else out.push(body as T)
 
     url = nextPageUrl(link)
+
+    // Still more pages at the cap: refuse to guess at a partial result. The
+    // adapter turns this into an `error` health status the student can see,
+    // rather than silently ingesting a truncated course and diffing the missing
+    // items as removals.
+    if (url && page + 1 >= maxPages && !seen.has(url)) {
+      throw new CanvasError(
+        `Canvas pagination exceeded ${maxPages} pages for ${firstUrl}; ` +
+          `refusing a truncated result`,
+        0,
+        firstUrl
+      )
+    }
   }
 
   return out
@@ -232,7 +264,8 @@ export async function fetchCanvasSnapshot(
   const courses = await get<CanvasCourse>("/api/v1/courses", {
     enrollment_state: "active",
     "include[]": ["term", "concluded"],
-    state: ["available", "completed", "unpublished"],
+    // Canvas defines this argument as `state[]`; a bare `state=` is ignored.
+    "state[]": ["available", "completed", "unpublished"],
   })
 
   const byCourse: Record<string, CanvasCourseBundle> = {}

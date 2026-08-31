@@ -1,6 +1,12 @@
 import { describe, expect, test } from "vitest"
 
-import { CanvasError, fetchAll, fetchCanvasSnapshot, type FetchFn } from "./client"
+import {
+  CanvasError,
+  fetchAll,
+  fetchCanvasSnapshot,
+  MAX_PAGES,
+  type FetchFn,
+} from "./client"
 
 /**
  * The fetch layer is the one part of the Canvas adapter that cannot be tested
@@ -91,6 +97,39 @@ describe("fetchAll", () => {
     expect(calls).toHaveLength(1)
   })
 
+  test("a next link that never ends stops at the page cap, loudly", async () => {
+    let page = 0
+    const calls: string[] = []
+    // Always a FRESH next url, so the seen-set loop guard cannot save us.
+    const fetchFn: FetchFn = async (url) => {
+      calls.push(url)
+      page++
+      return {
+        status: 200,
+        headers: {
+          get: (n: string) =>
+            n === "Link"
+              ? `<https://canvas.example.edu/api/v1/x?page=${page + 1}&per_page=100>; rel="next"`
+              : null,
+        },
+        text: async () => JSON.stringify([{ id: page }]),
+      }
+    }
+
+    await expect(
+      fetchAll("https://canvas.example.edu", "t", "/api/v1/x", {}, {
+        fetchFn,
+        sleep: noSleep,
+        maxPages: 3,
+      })
+    ).rejects.toThrow(/exceeded 3 pages/)
+    expect(calls).toHaveLength(3)
+  })
+
+  test("MAX_PAGES is the default ceiling", () => {
+    expect(MAX_PAGES).toBe(50)
+  })
+
   test("retries a 429 and then succeeds", async () => {
     let attempt = 0
     const delays: number[] = []
@@ -169,6 +208,24 @@ describe("fetchAll", () => {
 })
 
 describe("fetchCanvasSnapshot", () => {
+  test("asks for course states as an array, the way Canvas defines the argument", async () => {
+    let coursesUrl = ""
+    const fetchFn: FetchFn = async (url) => {
+      if (url.includes("/api/v1/courses?")) coursesUrl = url
+      return { status: 200, headers: { get: () => null }, text: async () => "[]" }
+    }
+    await fetchCanvasSnapshot("https://canvas.example.edu", "tok", {
+      fetchFn,
+      sleep: noSleep,
+    })
+    const params = new URL(coursesUrl).searchParams
+    expect(params.getAll("state[]")).toEqual(["available", "completed", "unpublished"])
+    expect(params.getAll("state")).toEqual([])
+    expect(decodeURIComponent(new URL(coursesUrl).search)).toContain(
+      "state[]=available&state[]=completed"
+    )
+  })
+
   test("walks courses then everything per course", async () => {
     const seen: string[] = []
     const fetchFn: FetchFn = async (url) => {

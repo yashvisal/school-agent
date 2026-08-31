@@ -5,7 +5,8 @@ import type { Doc, Id } from "../_generated/dataModel"
 import { internalAction, internalMutation } from "../_generated/server"
 import type { MutationCtx } from "../_generated/server"
 import { icalFixturePayload } from "../dev/fixtures"
-import { diffDeadlines, hashPayload } from "../lib/diff"
+import { proposeChangeInternal } from "../lib/changes"
+import { diffDeadlines, hashSnapshotPayload } from "../lib/diff"
 import { normalizeIcal } from "../lib/ical/parse"
 import {
   applyProposals,
@@ -32,6 +33,9 @@ import type { NormalizedDeadline } from "../lib/normalized"
  */
 
 type IcalPayload = { kind: "ical"; url: string; fetchedAt: number; text: string }
+
+/** Per-request wall clock for the outbound feed fetch. */
+const ICAL_TIMEOUT_MS = 30_000
 
 const isIcalPayload = (payload: unknown): payload is IcalPayload =>
   !!payload &&
@@ -154,12 +158,18 @@ export const ingestPayload = internalMutation({
       deadlines.filter(isOwn)
     )
 
+    const snapshotIds = previous ? [previous._id, snapshotId] : [snapshotId]
+
     const fallbackCourseId =
       ownProposals.length > 0
-        ? await ensureCalendarCourse(ctx, source.studentId, args.payload.url, courses)
+        ? await ensureCalendarCourse(ctx, {
+            studentId: source.studentId,
+            url: args.payload.url,
+            courses,
+            snapshotIds,
+          })
         : undefined
 
-    const snapshotIds = previous ? [previous._id, snapshotId] : [snapshotId]
     const outcome = await applyProposals(ctx, {
       studentId: source.studentId,
       proposals: [...reconciled.proposals, ...ownProposals],
@@ -195,30 +205,56 @@ async function loadDeadlines(
  * one. Rather than invent a course per event or drop the deadline, everything
  * unattributable from one feed lands in a single per-feed course the student
  * can see and rename.
+ *
+ * Created through `proposeChangeInternal`, not `ctx.db.insert`: this is a
+ * student-facing `courses` row, and the changes pipeline is the only write path
+ * to student state (CLAUDE.md). Origin `ical` is authoritative and unconflicted,
+ * so the change applies immediately and the feed can still explain where the
+ * course came from.
  */
 async function ensureCalendarCourse(
   ctx: MutationCtx,
-  studentId: Id<"students">,
-  url: string,
-  courses: Doc<"courses">[]
-): Promise<Id<"courses">> {
-  const existing = courses.find((course) => course.sourceRefs.icalUrl === url)
+  input: {
+    studentId: Id<"students">
+    url: string
+    courses: Doc<"courses">[]
+    snapshotIds: Id<"snapshots">[]
+  }
+): Promise<Id<"courses"> | undefined> {
+  const existing = input.courses.find(
+    (course) => course.sourceRefs.icalUrl === input.url
+  )
   if (existing) return existing._id
 
   let label = "Calendar"
   try {
-    label = `Calendar (${new URL(url).hostname})`
+    label = `Calendar (${new URL(input.url).hostname})`
   } catch {
     // A fixture or relative url: the generic label is fine.
   }
 
-  return await ctx.db.insert("courses", {
-    studentId,
-    name: label,
-    sourceRefs: { icalUrl: url },
-    status: "active",
-    provenance: { source: "ical", sourceRef: url, confidence: 1 },
+  const outcome = await proposeChangeInternal(ctx, {
+    studentId: input.studentId,
+    kind: "course_added",
+    entity: { table: "courses" },
+    after: {
+      name: label,
+      sourceRefs: { icalUrl: input.url },
+      status: "active",
+      provenance: {
+        source: "ical",
+        sourceRef: input.url,
+        confidence: 1,
+        snapshotId: input.snapshotIds[input.snapshotIds.length - 1],
+      },
+    },
+    origin: "ical",
+    snapshotIds: input.snapshotIds,
+    reason: `Deadlines from ${input.url} name no course, so they land here.`,
   })
+
+  const change = await ctx.db.get("changes", outcome.changeId)
+  return change?.entity.id as Id<"courses"> | undefined
 }
 
 /**
@@ -245,7 +281,7 @@ export const poll = internalAction({
 
     try {
       const payload = await icalPayloadFor(source.config)
-      const contentHash = await hashPayload(payload)
+      const contentHash = await hashSnapshotPayload(payload)
       const result: IngestResult = await ctx.runMutation(
         internal.ingest.ical.ingestPayload,
         { sourceId: args.sourceId, payload, contentHash }
@@ -292,7 +328,12 @@ async function icalPayloadFor(config: unknown): Promise<IcalPayload> {
   const url = typeof bag.url === "string" ? bag.url : ""
   if (!url) throw new Error("ical source config needs { url } or { mode: 'fixture' }")
 
-  const response = await fetch(url, { method: "GET" })
+  // Bounded like the Canvas client: a stalled host would otherwise hold the
+  // action open until the platform limit and delay every later poll.
+  const response = await fetch(url, {
+    method: "GET",
+    signal: AbortSignal.timeout(ICAL_TIMEOUT_MS),
+  })
   if (!response.ok) throw new Error(`iCal ${response.status} for ${url}`)
   const text = await response.text()
   return { kind: "ical", url, fetchedAt: Date.now(), text }

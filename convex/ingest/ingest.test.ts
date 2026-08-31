@@ -4,6 +4,7 @@ import { internal } from "../_generated/api"
 import type { Doc, Id } from "../_generated/dataModel"
 import { canvasFixturePayload } from "../dev/fixtures"
 import { DEV_CLERK_ID } from "../dev/seed"
+import { hashSnapshotPayload } from "../lib/diff"
 import { setupTest } from "../test.setup"
 
 /**
@@ -52,11 +53,19 @@ describe("fixture semester", () => {
     expect(pset?.title).toBe("Assignment 1: Sorting")
     expect(pset?.dueAt).toBe(Date.UTC(2026, 8, 15, 3, 59))
     expect(pset?.submissionStatus).toBe("graded")
+    // Every fact carries the snapshot it came out of (core.md, "Facts, not
+    // inference"), so any stored row can be traced back to the exact fetch.
+    const canvasSnapshot = (await snapshots(t)).find(
+      (s) => (s.payload as { kind?: string }).kind === "canvas"
+    )
     expect(pset?.provenance).toEqual({
       source: "canvas",
       sourceRef: "/api/v1/courses/1002/assignments/5101",
       confidence: 1,
+      snapshotId: canvasSnapshot?._id,
     })
+    expect(pset?.provenance.snapshotId).toBeDefined()
+    expect(rows.every((row) => row.provenance.snapshotId !== undefined)).toBe(true)
     expect(pset?.status).toBe("active")
 
     const materials = await t.run(
@@ -106,6 +115,42 @@ describe("fixture semester", () => {
     // The poll still happened, so the source is freshly stamped.
     const sources = await t.run(async (ctx) => await ctx.db.query("sources").take(10))
     expect(sources.every((s) => typeof s.lastPolledAt === "number")).toBe(true)
+  })
+
+  test("a re-poll that differs ONLY in fetchedAt stores no second snapshot", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    const sourceId = await t.run(async (ctx) => {
+      const source = (
+        await ctx.db
+          .query("sources")
+          .withIndex("by_student", (q) => q.eq("studentId", seeded.studentId))
+          .take(10)
+      ).find((s) => s.kind === "canvas")
+      return source!._id
+    })
+
+    const before = (await snapshots(t)).length
+    const beforeChanges = (await changes(t)).length
+    const at = (await snapshots(t)).find((s) => s.sourceId === sourceId)?.fetchedAt
+
+    // Exactly what a live poll 30 minutes later looks like: identical content,
+    // a newer clock reading.
+    const later = canvasFixturePayload({ fetchedAt: Date.UTC(2026, 9, 30, 12, 30) })
+    const result = await t.mutation(internal.ingest.canvas.ingestPayload, {
+      sourceId,
+      payload: later,
+      contentHash: await hashSnapshotPayload(later),
+    })
+
+    expect(result.created).toBe(false)
+    expect(result.proposed).toBe(0)
+    expect((await snapshots(t)).length).toBe(before)
+    expect((await changes(t)).length).toBe(beforeChanges)
+    // The stored snapshot keeps its original fetchedAt; only the source moves.
+    expect((await snapshots(t)).find((s) => s.sourceId === sourceId)?.fetchedAt).toBe(at)
+    const source = await t.run(async (ctx) => await ctx.db.get("sources", sourceId))
+    expect(typeof source?.lastPolledAt).toBe("number")
   })
 })
 
@@ -236,7 +281,23 @@ describe("a non-Canvas feed", () => {
     const courses = await t.run(async (ctx) => await ctx.db.query("courses").take(50))
     const outline = rows.find((r) => r.title === "Term paper outline")
     expect(courses.find((c) => c._id === outline?.courseId)?.code).toBe("STA210")
-    expect(courses.some((c) => c.name.startsWith("Calendar"))).toBe(true)
+    const calendarCourse = courses.find((c) => c.name.startsWith("Calendar"))
+    expect(calendarCourse).toBeDefined()
+
+    // The per-feed fallback course is student-facing state, so it exists ONLY
+    // because a `changes` row created it — the feed can explain where it came
+    // from (CLAUDE.md: every mutation goes through `changes`).
+    const feed = await changes(t)
+    const courseAdded = feed.filter(
+      (c) => c.kind === "course_added" && c.entity.id === calendarCourse?._id
+    )
+    expect(courseAdded).toHaveLength(1)
+    expect(courseAdded[0].origin).toBe("ical")
+    expect(courseAdded[0].tier).toBe("auto")
+    expect(courseAdded[0].status).toBe("applied")
+    expect(courseAdded[0].snapshotIds.length).toBeGreaterThanOrEqual(1)
+    expect(calendarCourse?.provenance.source).toBe("ical")
+    expect(calendarCourse?.provenance.snapshotId).toBe(courseAdded[0].snapshotIds.at(-1))
   })
 })
 

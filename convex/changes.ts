@@ -76,7 +76,14 @@ export const reject = mutation({
   },
 })
 
-/** The web approval queue: only what chat could not confirm in flow (rule 2). */
+/**
+ * The web approval queue: only what chat could not confirm in flow (rule 2).
+ *
+ * v0 bound: the newest 200 pending rows, no cursor. Deliberate — the queue is
+ * meant to be *drained*, in chat or with a tap, and the nightly pass expires
+ * anything older than the horizon (rule 5), so a queue deeper than 200 is itself
+ * the bug. When Face grows a real inbox, this becomes `.paginate(paginationOpts)`.
+ */
 export const listPending = query({
   args: { studentId: v.id("students") },
   returns: v.array(changeDocV),

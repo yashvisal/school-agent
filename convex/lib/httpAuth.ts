@@ -86,6 +86,45 @@ export const asObject = (value: unknown): Record<string, unknown> | undefined =>
     ? (value as Record<string, unknown>)
     : undefined
 
-/** "YYYY-MM-DD" and nothing else — the planner's date arg is client-supplied. */
-export const asDate = (value: unknown): string | undefined =>
-  typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : undefined
+/**
+ * "YYYY-MM-DD", and a date that actually exists — the planner's date arg is
+ * client-supplied. The shape check alone is not enough: `Date.UTC` *normalizes*
+ * `2026-02-31` into a March date rather than rejecting it, so a nonexistent day
+ * would silently plan a different one (CR 3892156188).
+ */
+export const asDate = (value: unknown): string | undefined => {
+  if (typeof value !== "string") return undefined
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  if (!match) return undefined
+  const [year, month, day] = [Number(match[1]), Number(match[2]), Number(match[3])]
+  const utc = new Date(Date.UTC(year, month - 1, day))
+  const roundTrips =
+    utc.getUTCFullYear() === year &&
+    utc.getUTCMonth() === month - 1 &&
+    utc.getUTCDate() === day
+  return roundTrips ? value : undefined
+}
+
+// ---------------------------------------------------------------------------
+// Error → status
+// ---------------------------------------------------------------------------
+
+/** Statuses an internal function may ask for by prefixing its message. */
+const CODED_STATUSES: ReadonlySet<number> = new Set([400, 401, 403, 404, 409])
+
+/**
+ * Core's internal functions signal an intended HTTP status by prefixing the
+ * thrown message — `throw new Error("404: student not found")`. Parsing that in
+ * one place keeps the convention structured instead of re-implemented per route,
+ * and keeps every *unrecognised* error out of the response body.
+ */
+export function codedError(
+  error: unknown
+): { status: number; message: string } | null {
+  const message = error instanceof Error ? error.message : String(error)
+  const match = /^(\d{3}):\s*(.*)$/.exec(message)
+  if (!match) return null
+  const status = Number(match[1])
+  if (!CODED_STATUSES.has(status)) return null
+  return { status, message: match[2] || message }
+}

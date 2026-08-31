@@ -177,7 +177,11 @@ describe("getFeasibleActions", () => {
         studentId: seeded.studentId,
         date: DATE,
         computedAt: NOW - PLAN_CACHE_MAX_AGE_MS - 1,
-        feasible: { date: DATE, windows: [], options: [{ title: "stale" }] },
+        feasible: {
+          date: DATE,
+          windows: [],
+          options: [{ ...snapshotOption, title: "stale" }],
+        },
         pendingAnnotations: [],
         signalsDigest: emptyDigest,
         operationId: `nightly:${seeded.studentId}:${DATE}`,
@@ -219,6 +223,87 @@ describe("getFeasibleActions", () => {
     expect(plan.options[0].dueAt).toBe(applied)
     expect(plan.options[0].pending?.[0]).toContain("Fri Sep 18")
     expect(plan.pending).toHaveLength(1)
+  })
+
+  test("a change landing after the snapshot invalidates it", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    await addDeadline(t, seeded)
+
+    await t.run(async (ctx) =>
+      ctx.db.insert("planRuns", {
+        studentId: seeded.studentId,
+        date: DATE,
+        computedAt: NOW - 60_000,
+        feasible: {
+          date: DATE,
+          windows: [{ startMin: 540, endMin: 600, durationMin: 60 }],
+          options: [snapshotOption],
+        },
+        pendingAnnotations: [],
+        signalsDigest: emptyDigest,
+        operationId: `nightly:${seeded.studentId}:${DATE}`,
+        triggerStatus: "triggered",
+      })
+    )
+
+    // Something the student said since the plan was computed. (`createdAt` is
+    // set to the simulated clock; the suite plans a day in 2026.)
+    const { changeId } = await t.mutation(internal.voice.proposeChange, {
+      studentId: seeded.studentId,
+      change: { kind: "chat_decision", entity: { table: "tasks" } },
+    })
+    await t.run(async (ctx) =>
+      ctx.db.patch("changes", changeId, { createdAt: NOW - 30_000 })
+    )
+
+    const plan = await t.query(internal.voice.getFeasibleActions, {
+      studentId: seeded.studentId,
+      date: DATE,
+      now: NOW,
+    })
+
+    // Recomputed on today's facts, and it does not cite a run it did not use.
+    expect(plan.cached).toBe(false)
+    expect(plan.planRunId).toBeUndefined()
+    expect(plan.options.map((o) => o.title)).toEqual(["Pset 3"])
+  })
+
+  test("a change resolved after the snapshot invalidates it too", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    await addDeadline(t, seeded)
+
+    // Proposed BEFORE the plan, approved after it: only `resolvedAt` moved.
+    const { changeId } = await t.mutation(internal.voice.proposeChange, {
+      studentId: seeded.studentId,
+      change: { kind: "chat_decision", entity: { table: "tasks" } },
+    })
+    await t.run(async (ctx) => {
+      await ctx.db.patch("changes", changeId, { createdAt: NOW - 120_000 })
+      await ctx.db.insert("planRuns", {
+        studentId: seeded.studentId,
+        date: DATE,
+        computedAt: NOW - 60_000,
+        feasible: { date: DATE, windows: [], options: [snapshotOption] },
+        pendingAnnotations: [],
+        signalsDigest: emptyDigest,
+        operationId: `nightly:${seeded.studentId}:${DATE}`,
+        triggerStatus: "triggered",
+      })
+      await ctx.db.patch("changes", changeId, {
+        status: "approved",
+        resolvedAt: NOW - 30_000,
+        resolvedVia: "chat",
+      })
+    })
+
+    const plan = await t.query(internal.voice.getFeasibleActions, {
+      studentId: seeded.studentId,
+      date: DATE,
+      now: NOW,
+    })
+    expect(plan.cached).toBe(false)
   })
 
   test("an unknown student is a 404, not an empty plan", async () => {
@@ -315,9 +400,25 @@ describe("proposeChange", () => {
     expect(change?.tier).toBe("needs_approval")
   })
 
-  test("an explicit authoritative origin still auto-applies", async () => {
+  test("Voice can never reach the auto tier, however it dresses the change", async () => {
     const t = setupTest()
     const seeded = await seed(t)
+
+    // `origin` is not part of the tool's surface at all: the argument validator
+    // rejects it, and even if it did not, the mutation forces `chat`.
+    await expect(
+      t.mutation(internal.voice.proposeChange, {
+        studentId: seeded.studentId,
+        change: {
+          courseId: seeded.courseId,
+          kind: "deadline_added",
+          entity: { table: "deadlines" },
+          after: { title: "From Canvas", kind: "homework" },
+          origin: "canvas",
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } as any,
+      })
+    ).rejects.toThrow()
 
     const result = await t.mutation(internal.voice.proposeChange, {
       studentId: seeded.studentId,
@@ -326,30 +427,43 @@ describe("proposeChange", () => {
         kind: "deadline_added",
         entity: { table: "deadlines" },
         after: { title: "From Canvas", kind: "homework" },
-        origin: "canvas",
       },
     })
-    expect(result.tier).toBe("auto")
-    expect(result.status).toBe("applied")
+    expect(result.tier).toBe("needs_approval")
+    expect(result.status).toBe("pending")
+
+    const change = await t.run(async (ctx) => ctx.db.get("changes", result.changeId))
+    expect(change?.origin).toBe("chat")
+    expect(await t.run(async (ctx) => ctx.db.query("deadlines").take(10))).toHaveLength(0)
   })
 
-  test("a source conflict is never auto-applied, even from Canvas", async () => {
+  test("a Voice change never writes provenance claiming a structured source", async () => {
     const t = setupTest()
     const seeded = await seed(t)
 
+    // The student confirms inline, so this one *does* land — carrying a
+    // caller-supplied provenance that claims Canvas said it.
     const result = await t.mutation(internal.voice.proposeChange, {
       studentId: seeded.studentId,
       change: {
         courseId: seeded.courseId,
         kind: "deadline_added",
         entity: { table: "deadlines" },
-        after: { title: "Disputed", kind: "homework" },
-        origin: "canvas",
-        conflict: true,
+        after: {
+          title: "Midterm",
+          kind: "exam",
+          provenance: { source: "canvas", sourceRef: "assignments/9999", confidence: 1 },
+        },
+        confirmedInline: true,
       },
     })
     expect(result.tier).toBe("needs_approval")
-    expect(result.status).toBe("pending")
+
+    const deadlines = await t.run(async (ctx) => ctx.db.query("deadlines").take(10))
+    expect(deadlines).toHaveLength(1)
+    expect(deadlines[0].provenance.source).toBe("chat")
+    expect(deadlines[0].provenance.sourceRef).toBe(result.changeId)
+    expect(deadlines[0].provenance.confidence).toBe(0.5)
   })
 
   test("the reported tier matches the row that was written", async () => {
@@ -541,6 +655,25 @@ describe("resolveStudent", () => {
     const seeded = await seed(t)
     const resolved = await t.query(internal.voice.resolveStudent, { clerkId: CLERK_ID })
     expect(resolved?.studentId).toBe(seeded.studentId)
+  })
+
+  test("two students on one number is a 409, not a coin flip", async () => {
+    const t = setupTest()
+    await seed(t)
+    await t.run(async (ctx) =>
+      ctx.db.insert("students", {
+        clerkId: "user_twin",
+        timezone: TZ,
+        phone: "+15551234567",
+        classBlocks: [],
+        availability: { weekly: [], exceptions: [] },
+        status: "active",
+      })
+    )
+
+    await expect(
+      t.query(internal.voice.resolveStudent, { phone: "(555) 123-4567" })
+    ).rejects.toThrow(/409/)
   })
 
   test("an unknown identifier resolves to null, never to someone else", async () => {

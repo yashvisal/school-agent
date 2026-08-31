@@ -44,6 +44,16 @@ import type { deadlineKindV, effortConfidenceV } from "./validators"
 
 export const DEFAULT_HORIZON_DAYS = 14
 
+/** Hard ceiling on a caller-supplied horizon; `normalizeHorizon` clamps to it. */
+export const MAX_HORIZON_DAYS = 60
+
+/**
+ * How far back a missed deadline is still worth mentioning. Past-due work is
+ * emitted as an option with `fits: []` so the agent can say "you missed this" —
+ * silence about a missed deadline is worse than the mention.
+ */
+export const OVERDUE_LOOKBACK_DAYS = 14
+
 /** A window shorter than this is not worth proposing as a work block. */
 export const MIN_BLOCK_MIN = 30
 
@@ -106,6 +116,12 @@ export type Option = {
   facts: string[]
   pending?: string[]
   signals?: string[]
+  /**
+   * Past due and still not submitted. `fits` is always empty on such an option —
+   * hard guarantee #2 (no window after the due time) is preserved — but it is
+   * emitted so the agent can raise the miss instead of pretending it never was.
+   */
+  overdue?: boolean
 }
 
 export type FeasibleActions = {
@@ -332,8 +348,25 @@ export function feasibleActions(input: FeasibleActionsInput): FeasibleActions {
   const { date, timezone, courses, deadlines, tasks, pendingChanges, signals } = input
   const horizonDays = normalizeHorizon(input.horizonDays)
   const horizonEndDate = addDays(date, horizonDays)
+  const overdueFromDate = addDays(date, -OVERDUE_LOOKBACK_DAYS)
 
-  const windows = windowsForDate(input, date)
+  /**
+   * One `windowsForDate` computation per date, shared by every option. Without
+   * this, `windowsBeforeDue` recomputes the same day once per option, and each
+   * computation runs `Intl.DateTimeFormat.formatToParts` several times — tens of
+   * thousands of identical conversions in one query (CR 3892156223).
+   */
+  const windowCache = new Map<string, Window[]>()
+  const windowsFor = (day: string): Window[] => {
+    let cached = windowCache.get(day)
+    if (!cached) {
+      cached = windowsForDate(input, day)
+      windowCache.set(day, cached)
+    }
+    return cached
+  }
+
+  const windows = windowsFor(date)
   const courseById = new Map(courses.map((c) => [c._id as string, c]))
 
   // --- signals -----------------------------------------------------------
@@ -373,10 +406,17 @@ export function feasibleActions(input: FeasibleActionsInput): FeasibleActions {
     if (CLOSED_SUBMISSION.has(deadline.submissionStatus)) continue
 
     let dueDate: string | undefined
+    let overdue = false
     if (deadline.dueAt !== undefined) {
       dueDate = localDate(deadline.dueAt, timezone)
-      if (dueDate < date) continue // already past
       if (dueDate > horizonEndDate) continue // beyond the horizon
+      if (dueDate < date) {
+        // Past due and not submitted: emitted with no fits, so the agent can
+        // raise the miss. Anything older than the lookback is water under the
+        // bridge and stays out of the set.
+        if (dueDate < overdueFromDate) continue
+        overdue = true
+      }
     }
 
     const task = taskByDeadline.get(deadline._id)
@@ -396,7 +436,9 @@ export function feasibleActions(input: FeasibleActionsInput): FeasibleActions {
       buildOption({
         input,
         windows,
+        windowsFor,
         horizonDays,
+        overdue,
         task,
         deadline,
         course,
@@ -428,7 +470,9 @@ export function feasibleActions(input: FeasibleActionsInput): FeasibleActions {
       buildOption({
         input,
         windows,
+        windowsFor,
         horizonDays,
+        overdue: false,
         task,
         deadline: undefined,
         course,
@@ -443,10 +487,16 @@ export function feasibleActions(input: FeasibleActionsInput): FeasibleActions {
   return { date, windows, options, pending, signalsDigest }
 }
 
-function normalizeHorizon(horizonDays: number | undefined): number {
+/**
+ * A whole number of days, at least 1 and at most `MAX_HORIZON_DAYS`. Exported so
+ * `convex/planner.ts` clamps the caller-supplied value *before* it builds a date
+ * range with it: a fractional horizon reaches `addDays` and yields
+ * `"NaN-NaN-NaN"`, and a negative one inverts the range (CR 3892156261).
+ */
+export function normalizeHorizon(horizonDays: number | undefined): number {
   if (horizonDays === undefined) return DEFAULT_HORIZON_DAYS
   if (!Number.isFinite(horizonDays) || horizonDays < 1) return DEFAULT_HORIZON_DAYS
-  return Math.min(Math.floor(horizonDays), 120)
+  return Math.min(Math.floor(horizonDays), MAX_HORIZON_DAYS)
 }
 
 function digest(sorted: Doc<"studentSignals">[]): SignalsDigest {
@@ -483,7 +533,11 @@ function relatedSignals(
 type BuildArgs = {
   input: FeasibleActionsInput
   windows: Window[]
+  /** Memoized `windowsForDate`, shared across every option. */
+  windowsFor: (day: string) => Window[]
   horizonDays: number
+  /** Past due and unsubmitted: emitted, but never with a fit. */
+  overdue: boolean
   task: Doc<"tasks"> | undefined
   deadline: Doc<"deadlines"> | undefined
   course: Doc<"courses"> | undefined
@@ -494,29 +548,32 @@ type BuildArgs = {
 }
 
 function buildOption(args: BuildArgs): Option {
-  const { input, windows, task, deadline, course, dueDate, effort } = args
+  const { input, windows, overdue, task, deadline, course, dueDate, effort } = args
   const { date, timezone } = input
 
-  // Hard guarantee #2: on the due day, nothing may run past the due minute.
+  // Hard guarantee #2: on the due day, nothing may run past the due minute —
+  // and for work whose due time is already behind us, no window qualifies at all.
   const cutoffMin =
     deadline?.dueAt !== undefined && dueDate === date
       ? localMinutes(deadline.dueAt, timezone)
       : 1440
 
   const fits: Fit[] = []
-  windows.forEach((window, windowIndex) => {
-    const startMin = window.startMin
-    const endMin = Math.min(window.endMin, cutoffMin)
-    const usable = endMin - startMin
-    if (usable < Math.min(effort.estEffortMin, MIN_BLOCK_MIN)) return
-    fits.push({
-      windowIndex,
-      startMin,
-      endMin: Math.min(endMin, startMin + effort.estEffortMin),
+  if (!overdue) {
+    windows.forEach((window, windowIndex) => {
+      const startMin = window.startMin
+      const endMin = Math.min(window.endMin, cutoffMin)
+      const usable = endMin - startMin
+      if (usable < Math.min(effort.estEffortMin, MIN_BLOCK_MIN)) return
+      fits.push({
+        windowIndex,
+        startMin,
+        endMin: Math.min(endMin, startMin + effort.estEffortMin),
+      })
     })
-  })
+  }
 
-  const remaining = windowsBeforeDue(args)
+  const remaining: RemainingWindows = overdue ? { count: 0 } : windowsBeforeDue(args)
   const kind = deadline?.kind ?? "other"
   const category = deadline?.category
   const categoryWeight = category
@@ -555,6 +612,7 @@ function buildOption(args: BuildArgs): Option {
     facts,
     pending: pending.length > 0 ? pending : undefined,
     signals: signalTexts.length > 0 ? signalTexts : undefined,
+    overdue: overdue ? true : undefined,
   }
 }
 
@@ -570,7 +628,7 @@ type RemainingWindows = {
  * Undated work is counted over the horizon instead.
  */
 function windowsBeforeDue(args: BuildArgs): RemainingWindows {
-  const { input, windows, horizonDays, deadline, dueDate } = args
+  const { input, windows, windowsFor, horizonDays, deadline, dueDate } = args
   const { date, timezone } = input
   const lastDate = dueDate ?? addDays(date, horizonDays)
   const span = Math.max(0, Math.min(daysBetween(date, lastDate), horizonDays))
@@ -580,7 +638,7 @@ function windowsBeforeDue(args: BuildArgs): RemainingWindows {
 
   for (let offset = 0; offset <= span; offset++) {
     const day = addDays(date, offset)
-    const dayWindows = offset === 0 ? windows : windowsForDate(input, day)
+    const dayWindows = offset === 0 ? windows : windowsFor(day)
     const cutoffMin =
       deadline?.dueAt !== undefined && day === dueDate
         ? localMinutes(deadline.dueAt, timezone)
@@ -603,13 +661,23 @@ function buildFacts(
     remaining: RemainingWindows
   }
 ): string[] {
-  const { deadline, course, effort, dueInDays, categoryWeight, fits, remaining } = args
+  const { deadline, course, effort, overdue, dueInDays, categoryWeight, fits, remaining } =
+    args
   const { timezone } = args.input
   const facts: string[] = []
 
   if (course?.name) facts.push(course.code ? `${course.name} (${course.code})` : course.name)
 
-  if (deadline?.dueAt !== undefined && dueInDays !== undefined) {
+  if (deadline?.dueAt !== undefined && overdue) {
+    // The miss is stated plainly, with the submission state that makes it a
+    // miss. There is no fit to offer — the due time has passed.
+    const daysAgo = dueInDays === undefined ? 0 : Math.abs(dueInDays)
+    const ago =
+      daysAgo === 0 ? "earlier today" : daysAgo === 1 ? "yesterday" : `${daysAgo} days ago`
+    facts.push(
+      `past due ${formatLocalDateTime(deadline.dueAt, timezone)} (${ago}), not submitted`
+    )
+  } else if (deadline?.dueAt !== undefined && dueInDays !== undefined) {
     const when =
       dueInDays === 0 ? "today" : dueInDays === 1 ? "tomorrow" : `in ${dueInDays} days`
     facts.push(`due ${formatLocalDateTime(deadline.dueAt, timezone)} (${when})`)
@@ -639,6 +707,10 @@ function buildFacts(
         })`
       : `effort ~${formatDuration(effort.estEffortMin)} (${effort.estEffortConfidence}-confidence prior)`
   facts.push(effortLabel)
+
+  // An overdue option has neither a fit nor a window before its due time; the
+  // "past due" fact above already says everything true about its timing.
+  if (overdue) return facts
 
   if (fits.length === 0) {
     facts.push("does not fit in any free window on this day")

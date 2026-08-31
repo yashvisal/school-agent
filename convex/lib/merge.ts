@@ -1,6 +1,9 @@
+import type { Infer } from "convex/values"
+
 import type { ChangeProposal } from "./diff"
 import { toDeadlineFields } from "./diff"
 import type { NormalizedDeadline } from "./normalized"
+import type { sourceKindV } from "./validators"
 
 /**
  * Merge precedence and cross-source reconciliation.
@@ -9,7 +12,14 @@ import type { NormalizedDeadline } from "./normalized"
  * site. Unresolvable conflict → `needs_approval`, never a silent pick."
  */
 
-export const SOURCE_PRECEDENCE: Record<string, number> = {
+export type SourceKind = Infer<typeof sourceKindV>
+
+/**
+ * Keyed by the source-kind union, not `string`: adding a source kind to
+ * `validators.ts` is then a type error here until it is given a rank, rather
+ * than silently defaulting to zero.
+ */
+export const SOURCE_PRECEDENCE: Record<SourceKind, number> = {
   // The student typing it themselves outranks every feed.
   manual: 100,
   canvas: 40,
@@ -20,10 +30,10 @@ export const SOURCE_PRECEDENCE: Record<string, number> = {
   chat: 5,
 }
 
-export const precedenceOf = (source: string): number => SOURCE_PRECEDENCE[source] ?? 0
+export const precedenceOf = (source: SourceKind): number => SOURCE_PRECEDENCE[source] ?? 0
 
 /** True when `candidate` may overwrite a fact currently sourced from `incumbent`. */
-export const outranks = (candidate: string, incumbent: string): boolean =>
+export const outranks = (candidate: SourceKind, incumbent: SourceKind): boolean =>
   precedenceOf(candidate) > precedenceOf(incumbent)
 
 /**
@@ -107,11 +117,19 @@ export function reconcileIcalWithCanvas(
       const match = byCanvasId.get(canvasId)
       if (match) {
         matchedKeys.push(deadline.key)
-        const drift =
-          match.dueAt !== undefined && deadline.dueAt !== undefined
-            ? Math.abs(match.dueAt - deadline.dueAt)
-            : 0
-        if (drift > CONFLICT_TOLERANCE_MS) {
+        const bothDated = match.dueAt !== undefined && deadline.dueAt !== undefined
+        const drift = bothDated
+          ? Math.abs((match.dueAt as number) - (deadline.dueAt as number))
+          : 0
+        // One side has no date at all. The two cases are NOT symmetric:
+        //   - Canvas has a date, the feed does not: Canvas outranks iCal on
+        //     dates, so it simply wins. Nothing to ask the student about.
+        //   - The feed has a date and the Canvas row does not: the sources
+        //     disagree about whether a date exists at all, which is exactly the
+        //     "unresolvable conflict → needs_approval, never a silent pick"
+        //     case in core.md.
+        const feedOnlyDate = match.dueAt === undefined && deadline.dueAt !== undefined
+        if (drift > CONFLICT_TOLERANCE_MS || feedOnlyDate) {
           proposals.push({
             kind: "deadline_moved",
             entity: "deadlines",
@@ -121,10 +139,13 @@ export function reconcileIcalWithCanvas(
             before: { dueAt: match.dueAt },
             after: { dueAt: deadline.dueAt },
             conflict: true,
-            reason:
-              `The calendar feed says ${new Date(deadline.dueAt as number).toISOString()} ` +
-              `but Canvas says ${new Date(match.dueAt as number).toISOString()}. ` +
-              `Canvas normally wins, so this is held for you to confirm.`,
+            reason: feedOnlyDate
+              ? `The calendar feed says ${new Date(deadline.dueAt as number).toISOString()} ` +
+                `but Canvas has no due date for this at all. ` +
+                `Canvas normally wins, so this is held for you to confirm.`
+              : `The calendar feed says ${new Date(deadline.dueAt as number).toISOString()} ` +
+                `but Canvas says ${new Date(match.dueAt as number).toISOString()}. ` +
+                `Canvas normally wins, so this is held for you to confirm.`,
           })
         }
         continue
@@ -164,6 +185,17 @@ function findFuzzyMatch(
   if (title.length === 0) return undefined
   for (const ref of existing) {
     if (normalizeTitle(ref.title) !== title) continue
+    // "Problem Set 3" exists in half the student's courses. When BOTH sides
+    // name a course, a mismatch is decisive: suppressing here would silently
+    // drop a real deadline from another course. When either side is silent
+    // (a bare `.ics` names no course), fall back to title + date alone.
+    if (
+      deadline.courseKey !== undefined &&
+      ref.courseKey !== undefined &&
+      deadline.courseKey !== ref.courseKey
+    ) {
+      continue
+    }
     if (deadline.dueAt === undefined || ref.dueAt === undefined) return ref
     if (Math.abs(ref.dueAt - deadline.dueAt) <= FUZZY_WINDOW_MS) return ref
   }

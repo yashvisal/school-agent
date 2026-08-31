@@ -16,7 +16,7 @@ Canvas access**. Keep them that way: if you need a realistic value, invent one.
 
 ### Layout
 
-```
+```text
 fixtures/
   canvas/                       spec-derived Canvas REST responses (Fall 2026, one student)
     courses.json                GET /api/v1/courses?enrollment_state=active&include[]=term
@@ -64,7 +64,7 @@ bundler can see. **After editing any `.ics`, run `node fixtures/ical/build.mjs`.
 `convex/dev/fixtures.ts` assembles these into the exact payload shapes the adapters see, and
 `convex/dev/seed.ts` ingests them through the real pipeline:
 
-```
+```bash
 npx convex run dev/seed:fixtureSemester
 npx convex run dev/seed:applyScenario '{"scenario":"moved"}'
 npx convex run dev/seed:reset

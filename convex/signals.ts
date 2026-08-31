@@ -2,6 +2,7 @@ import { v } from "convex/values"
 
 import { internalMutation, query } from "./_generated/server"
 import { requireStudent } from "./lib/auth"
+import { recordSignalInternal } from "./lib/signals"
 import {
   provenanceV,
   signalKindV,
@@ -42,28 +43,7 @@ export const record = internalMutation({
     provenance: v.optional(provenanceV),
   },
   returns: v.id("studentSignals"),
-  handler: async (ctx, args) => {
-    const text = args.text.trim()
-    if (!text) throw new Error("signal text must not be empty")
-    const observedAt =
-      args.observedAt !== undefined && Number.isFinite(args.observedAt)
-        ? args.observedAt
-        : Date.now()
-
-    return await ctx.db.insert("studentSignals", {
-      studentId: args.studentId,
-      kind: args.kind,
-      text,
-      refs: args.refs ?? {},
-      origin: args.origin,
-      observedAt,
-      provenance: args.provenance ?? {
-        source: args.origin === "chat" ? "chat" : "manual",
-        sourceRef: args.origin,
-        confidence: 0.5,
-      },
-    })
-  },
+  handler: async (ctx, args) => await recordSignalInternal(ctx, args),
 })
 
 /** Newest first. Face's "recently discussed" view reads this. */

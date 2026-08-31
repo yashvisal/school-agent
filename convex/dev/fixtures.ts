@@ -136,8 +136,9 @@ export function canvasFixturePayload(options?: {
   return {
     kind: "canvas",
     baseUrl: FIXTURE_BASE_URL,
-    // Fixed, not `Date.now()`: an unchanged fixture must hash to an unchanged
-    // snapshot, and `fetchedAt` is part of the payload.
+    // Fixed, not `Date.now()`, so the payload stays a pure function of its
+    // inputs. (`hashSnapshotPayload` neutralizes `fetchedAt` anyway — it is when
+    // we looked, not what the source said.)
     fetchedAt: options?.fetchedAt ?? Date.UTC(2026, 9, 30, 12, 0, 0),
     courses: courses as unknown as CanvasCourse[],
     byCourse: bundles,

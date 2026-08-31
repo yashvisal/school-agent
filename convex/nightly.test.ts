@@ -401,7 +401,43 @@ describe("runForStudent", () => {
     expect(result.voiceSessionId).toBeUndefined()
   })
 
-  test("a failed trigger is retried by the next pass", async () => {
+  test("no EVE_VOICE_TOKEN is skipped — a trigger is never sent unauthenticated", async () => {
+    vi.stubEnv("EVE_VOICE_TOKEN", "")
+    const t = setupTest()
+    const seeded = await seed(t)
+
+    const result = await t.action(internal.nightly.runForStudent, {
+      studentId: seeded.studentId,
+      date: TOMORROW,
+      now: NIGHTLY_NOW,
+    })
+
+    expect(result.triggerStatus).toBe("skipped")
+    expect(result.error).toBe("EVE_VOICE_TOKEN not set")
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect((await runsFor(t))[0].triggerStatus).toBe("skipped")
+  })
+
+  test("the eve POST carries an abort signal, and a timeout is a failure", async () => {
+    fetchMock.mockRejectedValue(
+      new DOMException("The operation was aborted due to timeout", "TimeoutError")
+    )
+    const t = setupTest()
+    const seeded = await seed(t)
+
+    const result = await t.action(internal.nightly.runForStudent, {
+      studentId: seeded.studentId,
+      date: TOMORROW,
+      now: NIGHTLY_NOW,
+    })
+
+    expect(result.triggerStatus).toBe("failed")
+    expect(result.error).toMatch(/timeout/i)
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(init.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  test("a failed trigger is re-sent when the same pass runs again", async () => {
     fetchMock.mockResolvedValueOnce(new Response("nope", { status: 500 }))
     const t = setupTest()
     const seeded = await seed(t)
@@ -475,11 +511,26 @@ describe("runForStudent", () => {
 // ---------------------------------------------------------------------------
 
 describe("tick", () => {
+  /**
+   * `tick` schedules each student's run rather than awaiting it, so one slow eve
+   * trigger cannot starve the rest of the roster. In a test that means draining
+   * the scheduler before asserting on what the runs did.
+   */
+  const drain = async (t: ReturnType<typeof setupTest>) => {
+    vi.useFakeTimers()
+    try {
+      await t.finishAllScheduledFunctions(vi.runAllTimers)
+    } finally {
+      vi.useRealTimers()
+    }
+  }
+
   test("starts a run at the student's local nightly hour", async () => {
     const t = setupTest()
     await seed(t)
 
     const result = await t.action(internal.nightly.tick, { now: NIGHTLY_NOW })
+    await drain(t)
 
     expect(result).toEqual({ considered: 1, started: 1 })
     const runs = await runsFor(t)
@@ -528,6 +579,7 @@ describe("tick", () => {
 
     // 4am in New York is 1am in Los Angeles, so only the first student runs.
     const result = await t.action(internal.nightly.tick, { now: NIGHTLY_NOW })
+    await drain(t)
     expect(result).toEqual({ considered: 2, started: 1 })
 
     const runs = await runsFor(t)
@@ -552,11 +604,105 @@ describe("tick", () => {
     await seed(t)
 
     await t.action(internal.nightly.tick, { now: NIGHTLY_NOW })
+    await drain(t)
     const second = await t.action(internal.nightly.tick, { now: NIGHTLY_NOW + 60_000 })
+    await drain(t)
 
     expect(second.started).toBe(0)
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(await runsFor(t)).toHaveLength(1)
+  })
+
+  test("a failed trigger is retried by a later tick in the same recovery window", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("nope", { status: 500 }))
+    const t = setupTest()
+    await seed(t)
+
+    await t.action(internal.nightly.tick, { now: NIGHTLY_NOW })
+    await drain(t)
+    expect((await runsFor(t))[0].triggerStatus).toBe("failed")
+
+    // An hour later, on the same local day: eve is back, and the pass retries.
+    const second = await t.action(internal.nightly.tick, {
+      now: NIGHTLY_NOW + 60 * 60 * 1000,
+    })
+    await drain(t)
+
+    expect(second.started).toBe(1)
+    const runs = await runsFor(t)
+    expect(runs).toHaveLength(1)
+    expect(runs[0].triggerStatus).toBe("triggered")
+    expect(runs[0].error).toBeUndefined()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  test("a triggered run is never restarted by a later tick", async () => {
+    const t = setupTest()
+    await seed(t)
+
+    await t.action(internal.nightly.tick, { now: NIGHTLY_NOW })
+    await drain(t)
+    const second = await t.action(internal.nightly.tick, {
+      now: NIGHTLY_NOW + 2 * 60 * 60 * 1000,
+    })
+    await drain(t)
+
+    expect(second.started).toBe(0)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  test("a late tick never starts a day's first run", async () => {
+    const t = setupTest()
+    await seed(t)
+
+    // Inside the recovery window, but there is nothing to recover.
+    const result = await t.action(internal.nightly.tick, {
+      now: NIGHTLY_NOW + 2 * 60 * 60 * 1000,
+    })
+    await drain(t)
+
+    expect(result).toEqual({ considered: 1, started: 0 })
+    expect(await runsFor(t)).toHaveLength(0)
+  })
+
+  test("an unusable timezone is recorded, not silently skipped", async () => {
+    const t = setupTest()
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {})
+    await seed(t, { timezone: "Mars/Olympus_Mons" })
+
+    const result = await t.action(internal.nightly.tick, { now: NIGHTLY_NOW })
+    await drain(t)
+
+    expect(result).toEqual({ considered: 1, started: 0 })
+    expect(errors).toHaveBeenCalled()
+    const runs = await runsFor(t)
+    expect(runs).toHaveLength(1)
+    expect(runs[0].triggerStatus).toBe("skipped")
+    expect(runs[0].error).toMatch(/unusable timezone/)
+    expect(fetchMock).not.toHaveBeenCalled()
+    errors.mockRestore()
+  })
+
+  test("every active student is considered, past one page of the roster", async () => {
+    const t = setupTest()
+    await seed(t)
+    // 250 more: the pass paginates, so none of them fall off a fixed cap.
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 250; i++) {
+        await ctx.db.insert("students", {
+          clerkId: `user_bulk_${i}`,
+          timezone: "America/Los_Angeles", // 1am local — considered, not started
+          classBlocks: [],
+          availability: { weekly: [], exceptions: [] },
+          status: "active",
+        })
+      }
+    })
+
+    const result = await t.action(internal.nightly.tick, { now: NIGHTLY_NOW })
+    await drain(t)
+
+    expect(result).toEqual({ considered: 251, started: 1 })
   })
 })
 

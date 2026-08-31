@@ -196,11 +196,39 @@ export type ApplyProposalsResult = {
  * the ones that apply immediately — becomes a durable, replayable change row
  * carrying its snapshot ids, so the feed can always answer "why did this move".
  */
+/**
+ * Stamps `provenance.snapshotId` on a proposal's `after` bag. Only touches a
+ * payload that already carries a provenance object — a partial `after` (the
+ * `{ dueAt }` a conflict proposal carries) is left exactly as it was.
+ */
+function withSnapshotProvenance(
+  after: unknown,
+  snapshotId: Id<"snapshots"> | undefined
+): unknown {
+  if (after === undefined || snapshotId === undefined) return after
+  const bag = asBag(after)
+  const provenance = bag.provenance
+  if (!provenance || typeof provenance !== "object" || Array.isArray(provenance)) {
+    return after
+  }
+  return {
+    ...bag,
+    provenance: { ...(provenance as Record<string, unknown>), snapshotId },
+  }
+}
+
 export async function applyProposals(
   ctx: MutationCtx,
   input: ApplyProposalsInput
 ): Promise<ApplyProposalsResult> {
   const result: ApplyProposalsResult = { proposed: 0, applied: 0, pending: 0, skipped: 0 }
+
+  // The snapshot this batch was derived FROM is the last id in the list (the
+  // previous snapshot, when there is one, comes first). core.md requires every
+  // stored fact to carry the snapshot that produced it, so it is stamped onto
+  // each proposal's provenance before the change is written — the change row's
+  // `snapshotIds` explains the diff, `provenance.snapshotId` explains the row.
+  const snapshotId = input.snapshotIds[input.snapshotIds.length - 1]
 
   for (const proposal of input.proposals) {
     let courseId: Id<"courses"> | undefined
@@ -236,10 +264,11 @@ export async function applyProposals(
       }
     }
 
-    const after =
+    const withCourse =
       proposal.entity === "deadlines" && courseId && proposal.after
         ? { ...asBag(proposal.after), courseId }
         : proposal.after
+    const after = withSnapshotProvenance(withCourse, snapshotId)
 
     const outcome = await proposeChangeInternal(ctx, {
       studentId: input.studentId,

@@ -229,6 +229,8 @@ export function parseIcalDate(
 export function parseIcs(text: string): IcalEvent[] {
   const events: IcalEvent[] = []
   let current: IcalEvent | null = null
+  /** Depth inside a sub-component of the current VEVENT (VALARM, …). */
+  let nested = 0
 
   for (const line of unfoldLines(text)) {
     if (line.length === 0) continue
@@ -237,14 +239,30 @@ export function parseIcs(text: string): IcalEvent[] {
 
     if (property.name === "BEGIN" && property.value.toUpperCase() === "VEVENT") {
       current = { properties: [] }
+      nested = 0
       continue
     }
     if (property.name === "END" && property.value.toUpperCase() === "VEVENT") {
       if (current) events.push(current)
       current = null
+      nested = 0
       continue
     }
     if (!current) continue
+
+    // A VALARM carries its own SUMMARY/DESCRIPTION (the reminder text), and it
+    // normally follows the event's own properties — so without this the alarm's
+    // description becomes the deadline's, and an alarm SUMMARY would even change
+    // `kindFromTitle`. Sub-component bodies belong to the sub-component.
+    if (property.name === "BEGIN") {
+      nested++
+      continue
+    }
+    if (property.name === "END") {
+      if (nested > 0) nested--
+      continue
+    }
+    if (nested > 0) continue
 
     current.properties.push(property)
     switch (property.name) {

@@ -183,14 +183,13 @@ export function normalizeCanvas(payload: CanvasSnapshotPayload): NormalizedState
     const key = courseKeyOf(courseId)
     const bundle: CanvasCourseBundle = payload.byCourse?.[courseId] ?? emptyCourseBundle()
 
+    const gradingScheme = gradingSchemeFor(bundle.assignmentGroups)
     courses.push({
       key,
       name: course.name ?? `Canvas course ${courseId}`,
       ...(course.course_code ? { code: course.course_code } : {}),
       sourceRefs: { canvasCourseId: courseId },
-      ...(gradingSchemeFor(bundle.assignmentGroups)
-        ? { gradingScheme: gradingSchemeFor(bundle.assignmentGroups) }
-        : {}),
+      ...(gradingScheme ? { gradingScheme } : {}),
       status: courseStatusFor(course),
       provenance: provenance(`/api/v1/courses/${courseId}`),
     })
