@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env node
+#!/usr/bin/env node
 /**
  * Outbound attachments from a stateless context â€” Spike A items 2 and 3.
  *
