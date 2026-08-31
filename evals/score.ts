@@ -97,36 +97,53 @@ type Item = { title: string; dueAt?: number }
 
 /**
  * Greedy best-first pairing. Greedy rather than optimal because the alternative
- * (Hungarian) buys nothing here: titles in one document are far apart, so the
- * best pair is nearly always unambiguous, and a greedy mismatch would show up as
- * BOTH a miss and an extra rather than hiding.
+ * MAXIMUM-CARDINALITY matching, not greedy best-edge-first: with expected
+ * ["Exam", "Final Exam"] and actual ["Final Exam", "Final"], greedy takes the
+ * exact "Final Exam" pair and strands "Exam", failing a correct extraction at
+ * F1 0.50 (CR 3898824612). Kuhn's augmenting paths over the eligible edges
+ * maximizes the number of matched pairs; each vertex's candidate list is
+ * ordered by similarity, so similarity remains the tie-break among maximum
+ * matchings.
  */
 function pair(
   expected: Item[],
   actual: Item[]
 ): { pairs: [Item, Item][]; missing: Item[]; extra: Item[] } {
-  const scored: { score: number; e: number; a: number }[] = []
-  expected.forEach((e, ei) =>
-    actual.forEach((a, ai) => {
-      const score = titleSimilarity(e.title, a.title)
-      if (score >= TITLE_MATCH_FLOOR) scored.push({ score, e: ei, a: ai })
-    })
+  // Eligible edges per expected item, best-similarity first.
+  const edges: number[][] = expected.map((e) =>
+    actual
+      .map((a, ai) => ({ ai, score: titleSimilarity(e.title, a.title) }))
+      .filter((entry) => entry.score >= TITLE_MATCH_FLOOR)
+      .sort((x, y) => y.score - x.score)
+      .map((entry) => entry.ai)
   )
-  scored.sort((x, y) => y.score - x.score)
 
-  const usedE = new Set<number>()
-  const usedA = new Set<number>()
-  const pairs: [Item, Item][] = []
-  for (const { e, a } of scored) {
-    if (usedE.has(e) || usedA.has(a)) continue
-    usedE.add(e)
-    usedA.add(a)
-    pairs.push([expected[e], actual[a]])
+  const matchOfActual: number[] = actual.map(() => -1)
+  const tryAssign = (ei: number, visited: Set<number>): boolean => {
+    for (const ai of edges[ei]) {
+      if (visited.has(ai)) continue
+      visited.add(ai)
+      if (matchOfActual[ai] === -1 || tryAssign(matchOfActual[ai], visited)) {
+        matchOfActual[ai] = ei
+        return true
+      }
+    }
+    return false
   }
+  for (let ei = 0; ei < expected.length; ei++) tryAssign(ei, new Set())
+
+  const matchOfExpected: number[] = expected.map(() => -1)
+  matchOfActual.forEach((ei, ai) => {
+    if (ei !== -1) matchOfExpected[ei] = ai
+  })
+  const pairs: [Item, Item][] = []
+  matchOfExpected.forEach((ai, ei) => {
+    if (ai !== -1) pairs.push([expected[ei], actual[ai]])
+  })
   return {
     pairs,
-    missing: expected.filter((_, i) => !usedE.has(i)),
-    extra: actual.filter((_, i) => !usedA.has(i)),
+    missing: expected.filter((_, ei) => matchOfExpected[ei] === -1),
+    extra: actual.filter((_, ai) => matchOfActual[ai] === -1),
   }
 }
 
@@ -228,8 +245,10 @@ function scoreGrading(
     }
     matched++
   }
-  if (got.length > want.length) {
-    mismatches.push(`${got.length - want.length} extra categor(ies): ${got.map((c) => c.name).join(", ")}`)
+  // Only the categories no expected entry matched are extra (CR 3898824615).
+  const extras = got.filter((_, index) => !used.has(index))
+  if (got.length > want.length && extras.length > 0) {
+    mismatches.push(`${extras.length} extra categor(ies): ${extras.map((c) => c.name).join(", ")}`)
   }
 
   return { expected: want.length, matched, exact: mismatches.length === 0, mismatches }
