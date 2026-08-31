@@ -63,6 +63,13 @@ export default photonIMessageChannel({
     // outage: a duplicate reply is survivable, a student whose real text is
     // silently dropped is not — and with Core down the tools would fail the
     // turn loudly anyway.
+    //
+    // Known, accepted window (flagged in review): the log row commits before
+    // eve durably enqueues the turn, so a crash in between makes Photon's
+    // retry look like a duplicate and that message gets no reply. The window
+    // is milliseconds wide and the cost is one dropped text; closing it needs
+    // a claim/finalize handshake with a post-dispatch hook, which is not worth
+    // its complexity at this stage. Revisit if silent drops are ever observed.
     try {
       const inbound = await recordInbound({
         phone: String(message.author.userId),
