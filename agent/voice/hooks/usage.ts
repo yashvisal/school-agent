@@ -21,11 +21,14 @@ import { resolveStudent, sessionPhone } from "../lib/students.js"
  * the cached resolveStudent.
  *
  * Failure posture (review-discussed): the write is retried with short backoff,
- * then shouted to the log. It deliberately does NOT fail the turn — the
- * student's conversation outranks bookkeeping — and there is no durable replay
- * queue in eve, because nothing durable may live in eve (the truth rule,
- * vision §10). If retries ever prove insufficient, the fix is a Core-side
- * reconciliation against eve's traces, not eve-side persistence.
+ * then shouted to the log. Retries are safe because every attempt carries the
+ * same idempotency key (`<sessionId>:<turnId>:<stepIndex>` — one model step),
+ * and Core returns the row it already made instead of inserting a second.
+ * It deliberately does NOT fail the turn — the student's conversation
+ * outranks bookkeeping — and there is no durable replay queue in eve, because
+ * nothing durable may live in eve (the truth rule, vision §10). If retries
+ * ever prove insufficient, the fix is a Core-side reconciliation against
+ * eve's traces, not eve-side persistence.
  */
 
 /** Backoff before each attempt; three tries covers a transient blip. */
@@ -57,6 +60,8 @@ export default defineHook({
         (usage.cacheReadTokens ?? 0) +
         (usage.cacheWriteTokens ?? 0)
 
+      const idempotencyKey = `${ctx.session.id}:${event.data.turnId}:${event.data.stepIndex}`
+
       let lastError: unknown
       for (const delayMs of RETRY_DELAYS_MS) {
         if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs))
@@ -69,6 +74,7 @@ export default defineHook({
             completionTokens: usage.outputTokens ?? 0,
             costUsd: usage.costUsd,
             sessionId: ctx.session.id,
+            idempotencyKey,
           })
           console.info("[voice/usage]", {
             usageId,

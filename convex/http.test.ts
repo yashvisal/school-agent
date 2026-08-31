@@ -615,6 +615,31 @@ describe("logUsage", () => {
     })
   })
 
+  test("a replay with the same idempotencyKey returns the existing row, not a second", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    const row = {
+      studentId: seeded.studentId,
+      model: "anthropic/claude-sonnet-5",
+      promptTokens: 14236,
+      completionTokens: 79,
+      sessionId: "wrun_A",
+      idempotencyKey: "wrun_A:turn_0:0",
+    }
+
+    const first = (await (await post(t, "/voice/logUsage", row)).json()) as { usageId: string }
+    // The hook's retry: same key, same step, response to the first POST lost.
+    const second = (await (await post(t, "/voice/logUsage", row)).json()) as { usageId: string }
+
+    expect(second.usageId).toBe(first.usageId)
+    const rows = await t.run(async (ctx) => ctx.db.query("usage").take(10))
+    expect(rows).toHaveLength(1)
+
+    // A different step is a different call, and a new row.
+    await post(t, "/voice/logUsage", { ...row, idempotencyKey: "wrun_A:turn_0:1" })
+    expect(await t.run(async (ctx) => ctx.db.query("usage").take(10))).toHaveLength(2)
+  })
+
   test("works without a studentId, so a pre-resolution call is still costed", async () => {
     const t = setupTest()
     const response = await post(t, "/voice/logUsage", {

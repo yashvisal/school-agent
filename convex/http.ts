@@ -192,6 +192,7 @@ http.route({
         costUsd: asNumber(gated.body.costUsd),
         sessionId: asString(gated.body.sessionId),
         at: asNumber(gated.body.at),
+        idempotencyKey: asString(gated.body.idempotencyKey),
       })
       return jsonResponse({ ok: true, usageId })
     } catch (error) {

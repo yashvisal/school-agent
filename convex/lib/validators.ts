@@ -389,6 +389,12 @@ export const usageFields = {
   costUsd: v.optional(v.number()),
   sessionId: v.optional(v.string()),
   at: v.number(),
+  /**
+   * Caller-supplied idempotency key (Voice: `<sessionId>:<turnId>:<stepIndex>`).
+   * The hook retries a failed write, and a write that succeeded but lost its
+   * response must not become a second row for the same model call.
+   */
+  idempotencyKey: v.optional(v.string()),
 }
 
 export const studentSignalFields = {

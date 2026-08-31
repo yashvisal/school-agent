@@ -207,6 +207,8 @@ export async function logUsage(row: {
   costUsd?: number
   sessionId?: string
   at?: number
+  /** Stable per model step; Core returns the existing row on a replay. */
+  idempotencyKey?: string
 }): Promise<{ usageId: string }> {
   return await corePost("/voice/logUsage", row)
 }

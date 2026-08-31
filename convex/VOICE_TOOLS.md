@@ -452,7 +452,8 @@ eve.
   "completionTokens": 180,
   "costUsd": 0.0234,
   "sessionId": "wrun_A",
-  "at": 1789200000000
+  "at": 1789200000000,
+  "idempotencyKey": "wrun_A:turn_0:1"
 }
 ```
 
@@ -460,6 +461,12 @@ eve.
 optional, so a call made before the student is resolved is still costed.
 `surface` defaults to `"voice"` (`voice | workspace | ingestion | planner`).
 Negative or non-finite token counts are floored to `0` rather than stored.
+
+**Send `idempotencyKey`, and retry freely.** Use something stable per model
+step — Voice sends `<sessionId>:<turnId>:<stepIndex>`. A replay with a key Core
+has already seen returns the existing `usageId` and inserts nothing, so a write
+that landed but lost its response can be retried without metering the call
+twice. Without a key every POST is a new row.
 
 **Response `200`** — `{ "ok": true, "usageId": "r66g..." }`
 
