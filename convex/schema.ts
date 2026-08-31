@@ -24,6 +24,8 @@ import {
 export default defineSchema({
   students: defineTable(studentFields)
     .index("by_clerkId", ["clerkId"])
+    // Voice resolves an inbound iMessage number to its student (voice.md M1 #1).
+    .index("by_phone", ["phone"])
     .index("by_status", ["status"]),
 
   courses: defineTable(courseFields)

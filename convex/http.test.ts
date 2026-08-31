@@ -1,0 +1,485 @@
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
+
+import type { Id } from "./_generated/dataModel"
+import { timingSafeEqual } from "./lib/httpAuth"
+import { localDateToMs } from "./lib/time"
+import { CLERK_ID, setupTest } from "./test.setup"
+
+/**
+ * The agent HTTP surface (`convex/http.ts`) — how eve reaches Core.
+ *
+ * This is the only publicly-addressable door to the Voice tools, so the tests
+ * that matter most are the negative ones: no bearer, wrong bearer, junk body,
+ * malformed id. Each must be a clean, specific status rather than a 500 that
+ * leaks a stack trace or, worse, a 200 that wrote something.
+ */
+
+const SECRET = "test-core-agent-secret-0123456789"
+const TZ = "America/New_York"
+const DATE = "2026-09-14"
+const at = (date: string, minutes: number) => localDateToMs(date, minutes, TZ)
+
+beforeEach(() => {
+  vi.stubEnv("CORE_AGENT_SECRET", SECRET)
+})
+
+afterEach(() => {
+  vi.unstubAllEnvs()
+})
+
+type Seeded = { studentId: Id<"students">; courseId: Id<"courses"> }
+
+async function seed(t: ReturnType<typeof setupTest>): Promise<Seeded> {
+  return await t.run(async (ctx) => {
+    const studentId = await ctx.db.insert("students", {
+      clerkId: CLERK_ID,
+      timezone: TZ,
+      phone: "+15551234567",
+      classBlocks: [],
+      availability: {
+        weekly: [{ dayOfWeek: 1, startMin: 9 * 60, endMin: 21 * 60 }],
+        exceptions: [],
+      },
+      status: "active",
+    })
+    const courseId = await ctx.db.insert("courses", {
+      studentId,
+      name: "Compsci 201",
+      sourceRefs: {},
+      status: "active",
+      provenance: { source: "canvas", sourceRef: "courses/1001", confidence: 1 },
+    })
+    return { studentId, courseId }
+  })
+}
+
+const post = (
+  t: ReturnType<typeof setupTest>,
+  path: string,
+  body: unknown,
+  init: { auth?: string | null; raw?: string } = {}
+) =>
+  t.fetch(path, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(init.auth === null
+        ? {}
+        : { authorization: init.auth ?? `Bearer ${SECRET}` }),
+    },
+    body: init.raw ?? JSON.stringify(body),
+  })
+
+const ROUTES = [
+  "/voice/getFeasibleActions",
+  "/voice/proposeChange",
+  "/voice/recordSignal",
+  "/voice/logUsage",
+  "/voice/resolveStudent",
+] as const
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+
+describe("auth", () => {
+  for (const path of ROUTES) {
+    test(`${path} rejects a request with no Authorization header`, async () => {
+      const t = setupTest()
+      const response = await post(t, path, {}, { auth: null })
+      expect(response.status).toBe(401)
+      await expect(response.json()).resolves.toEqual({
+        ok: false,
+        error: "unauthorized",
+      })
+    })
+  }
+
+  test("rejects a wrong bearer token", async () => {
+    const t = setupTest()
+    const response = await post(
+      t,
+      "/voice/resolveStudent",
+      { phone: "+15551234567" },
+      { auth: "Bearer not-the-secret" }
+    )
+    expect(response.status).toBe(401)
+  })
+
+  test("rejects a token that is a prefix of the real one", async () => {
+    const t = setupTest()
+    const response = await post(
+      t,
+      "/voice/resolveStudent",
+      {},
+      { auth: `Bearer ${SECRET.slice(0, -1)}` }
+    )
+    expect(response.status).toBe(401)
+  })
+
+  test("rejects a non-Bearer scheme carrying the right secret", async () => {
+    const t = setupTest()
+    const response = await post(t, "/voice/resolveStudent", {}, { auth: SECRET })
+    expect(response.status).toBe(401)
+  })
+
+  test("fails closed when the deployment has no CORE_AGENT_SECRET set", async () => {
+    vi.stubEnv("CORE_AGENT_SECRET", "")
+    const t = setupTest()
+    const response = await post(t, "/voice/resolveStudent", { phone: "+1555" })
+    expect(response.status).toBe(401)
+    const body = (await response.json()) as { error: string }
+    expect(body.error).toMatch(/CORE_AGENT_SECRET/)
+  })
+
+  test("accepts the scheme case-insensitively, as HTTP requires", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    const response = await post(
+      t,
+      "/voice/resolveStudent",
+      { phone: "+15551234567" },
+      { auth: `bearer ${SECRET}` }
+    )
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { studentId: string }
+    expect(body.studentId).toBe(seeded.studentId)
+  })
+})
+
+describe("timingSafeEqual", () => {
+  test("matches only exactly equal strings", () => {
+    expect(timingSafeEqual("abc", "abc")).toBe(true)
+    expect(timingSafeEqual("abc", "abd")).toBe(false)
+    expect(timingSafeEqual("abc", "ab")).toBe(false)
+    expect(timingSafeEqual("", "")).toBe(true)
+    expect(timingSafeEqual("", "a")).toBe(false)
+  })
+
+  test("handles multi-byte characters without a length shortcut", () => {
+    expect(timingSafeEqual("é", "é")).toBe(true)
+    expect(timingSafeEqual("é", "e")).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Body handling
+// ---------------------------------------------------------------------------
+
+describe("body validation", () => {
+  for (const path of ROUTES) {
+    test(`${path} returns 400 on a malformed JSON body`, async () => {
+      const t = setupTest()
+      const response = await post(t, path, undefined, { raw: "{not json" })
+      expect(response.status).toBe(400)
+      const body = (await response.json()) as { error: string }
+      expect(body.error).toMatch(/valid JSON/)
+    })
+
+    test(`${path} returns 400 when the body is not an object`, async () => {
+      const t = setupTest()
+      const response = await post(t, path, undefined, { raw: "[1,2,3]" })
+      expect(response.status).toBe(400)
+    })
+  }
+
+  test("auth is checked before the body is parsed", async () => {
+    const t = setupTest()
+    const response = await post(t, "/voice/proposeChange", undefined, {
+      auth: null,
+      raw: "{not json",
+    })
+    expect(response.status).toBe(401)
+  })
+
+  test("getFeasibleActions rejects a date that is not YYYY-MM-DD", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    const response = await post(t, "/voice/getFeasibleActions", {
+      studentId: seeded.studentId,
+      date: "September 14th",
+    })
+    expect(response.status).toBe(400)
+    const body = (await response.json()) as { error: string }
+    expect(body.error).toMatch(/YYYY-MM-DD/)
+  })
+
+  test("a missing required field is a 400 naming the field", async () => {
+    const t = setupTest()
+    await seed(t)
+    const response = await post(t, "/voice/getFeasibleActions", { date: DATE })
+    expect(response.status).toBe(400)
+    const body = (await response.json()) as { error: string }
+    expect(body.error).toMatch(/studentId/)
+  })
+
+  test("a malformed studentId is a clean 400, not an opaque 500", async () => {
+    const t = setupTest()
+    await seed(t)
+    const response = await post(t, "/voice/getFeasibleActions", {
+      studentId: "not-an-id",
+      date: DATE,
+    })
+    expect(response.status).toBe(400)
+  })
+
+  test("logUsage requires the fields that make a usage row meaningful", async () => {
+    const t = setupTest()
+    const response = await post(t, "/voice/logUsage", { model: "m" })
+    expect(response.status).toBe(400)
+    const body = (await response.json()) as { error: string }
+    expect(body.error).toMatch(/promptTokens/)
+  })
+
+  test("resolveStudent requires at least one identifier", async () => {
+    const t = setupTest()
+    const response = await post(t, "/voice/resolveStudent", {})
+    expect(response.status).toBe(400)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Happy paths
+// ---------------------------------------------------------------------------
+
+describe("getFeasibleActions", () => {
+  test("returns the plan for the day", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    await t.run(async (ctx) =>
+      ctx.db.insert("deadlines", {
+        studentId: seeded.studentId,
+        courseId: seeded.courseId,
+        title: "Pset 3",
+        kind: "homework",
+        dueAt: at("2026-09-17", 23 * 60 + 59),
+        submissionStatus: "unsubmitted",
+        externalIds: {},
+        provenance: { source: "canvas", sourceRef: "a/1", confidence: 1 },
+        status: "active",
+      })
+    )
+
+    const response = await post(t, "/voice/getFeasibleActions", {
+      studentId: seeded.studentId,
+      date: DATE,
+      now: at(DATE, 6 * 60),
+    })
+
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as {
+      ok: boolean
+      plan: { date: string; options: { title: string }[]; timezone: string }
+    }
+    expect(body.ok).toBe(true)
+    expect(body.plan.date).toBe(DATE)
+    expect(body.plan.timezone).toBe(TZ)
+    expect(body.plan.options.map((o) => o.title)).toEqual(["Pset 3"])
+  })
+})
+
+describe("proposeChange", () => {
+  test("holds a chat change pending and reports its tier", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+
+    const response = await post(t, "/voice/proposeChange", {
+      studentId: seeded.studentId,
+      change: {
+        courseId: seeded.courseId,
+        kind: "deadline_added",
+        entity: { table: "deadlines" },
+        after: { title: "Midterm", kind: "exam" },
+      },
+    })
+
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as {
+      ok: boolean
+      status: string
+      tier: string
+      changeId: string
+    }
+    expect(body).toMatchObject({
+      ok: true,
+      status: "pending",
+      tier: "needs_approval",
+    })
+
+    const deadlines = await t.run(async (ctx) => ctx.db.query("deadlines").take(10))
+    expect(deadlines).toHaveLength(0)
+  })
+
+  test("an inline confirmation applies through the route", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+
+    const response = await post(t, "/voice/proposeChange", {
+      studentId: seeded.studentId,
+      change: {
+        courseId: seeded.courseId,
+        kind: "deadline_added",
+        entity: { table: "deadlines" },
+        after: { title: "Midterm", kind: "exam" },
+        confirmedInline: true,
+      },
+    })
+
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { status: string }
+    expect(body.status).toBe("approved")
+
+    const deadlines = await t.run(async (ctx) => ctx.db.query("deadlines").take(10))
+    expect(deadlines).toHaveLength(1)
+  })
+
+  test("a change that is not an object is a 400", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    const response = await post(t, "/voice/proposeChange", {
+      studentId: seeded.studentId,
+      change: "deadline moved",
+    })
+    expect(response.status).toBe(400)
+  })
+
+  test("an invalid change kind is a 400 from the validator, and writes nothing", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    const response = await post(t, "/voice/proposeChange", {
+      studentId: seeded.studentId,
+      change: { kind: "deadline_teleported", entity: { table: "deadlines" } },
+    })
+    expect(response.status).toBe(400)
+    const changes = await t.run(async (ctx) => ctx.db.query("changes").take(10))
+    expect(changes).toHaveLength(0)
+  })
+})
+
+describe("recordSignal", () => {
+  test("writes the signal and returns its id", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+
+    const response = await post(t, "/voice/recordSignal", {
+      studentId: seeded.studentId,
+      signal: {
+        kind: "pacing",
+        text: "said 2h, took 4h on CS pset 3",
+        refs: { courseId: seeded.courseId },
+        sessionId: "wrun_A",
+      },
+    })
+
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { ok: boolean; signalId: string }
+    expect(body.ok).toBe(true)
+
+    const signal = await t.run(async (ctx) =>
+      ctx.db.get("studentSignals", body.signalId as Id<"studentSignals">)
+    )
+    expect(signal?.text).toBe("said 2h, took 4h on CS pset 3")
+    expect(signal?.provenance.sourceRef).toBe("wrun_A")
+  })
+
+  test("an empty signal text surfaces as a 500-free error, not a silent write", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    const response = await post(t, "/voice/recordSignal", {
+      studentId: seeded.studentId,
+      signal: { kind: "other", text: "  " },
+    })
+    expect(response.status).toBeGreaterThanOrEqual(400)
+    const signals = await t.run(async (ctx) => ctx.db.query("studentSignals").take(10))
+    expect(signals).toHaveLength(0)
+  })
+})
+
+describe("logUsage", () => {
+  test("records an LLM call", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+
+    const response = await post(t, "/voice/logUsage", {
+      studentId: seeded.studentId,
+      model: "anthropic/claude-opus-4-7",
+      promptTokens: 1200,
+      completionTokens: 180,
+      costUsd: 0.0234,
+      sessionId: "wrun_A",
+    })
+
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { usageId: string }
+    const usage = await t.run(async (ctx) =>
+      ctx.db.get("usage", body.usageId as Id<"usage">)
+    )
+    expect(usage).toMatchObject({
+      surface: "voice",
+      model: "anthropic/claude-opus-4-7",
+      promptTokens: 1200,
+    })
+  })
+
+  test("works without a studentId, so a pre-resolution call is still costed", async () => {
+    const t = setupTest()
+    const response = await post(t, "/voice/logUsage", {
+      model: "classifier",
+      promptTokens: 40,
+      completionTokens: 5,
+    })
+    expect(response.status).toBe(200)
+  })
+})
+
+describe("resolveStudent", () => {
+  test("maps a phone number to a student and timezone", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+
+    const response = await post(t, "/voice/resolveStudent", {
+      phone: "(555) 123-4567",
+    })
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({
+      ok: true,
+      studentId: seeded.studentId,
+      timezone: TZ,
+      status: "active",
+    })
+  })
+
+  test("maps a Clerk id to the same student", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    const response = await post(t, "/voice/resolveStudent", { clerkId: CLERK_ID })
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { studentId: string }
+    expect(body.studentId).toBe(seeded.studentId)
+  })
+
+  test("an unknown number is a 404, never someone else's student", async () => {
+    const t = setupTest()
+    await seed(t)
+    const response = await post(t, "/voice/resolveStudent", { phone: "+15559999999" })
+    expect(response.status).toBe(404)
+  })
+})
+
+describe("routing", () => {
+  test("an unrouted path is not served", async () => {
+    const t = setupTest()
+    const response = await post(t, "/voice/deleteEverything", {})
+    expect(response.status).toBe(404)
+  })
+
+  test("GET is not accepted on a POST route", async () => {
+    const t = setupTest()
+    const response = await t.fetch("/voice/resolveStudent", {
+      method: "GET",
+      headers: { authorization: `Bearer ${SECRET}` },
+    })
+    expect(response.status).toBe(404)
+  })
+})
