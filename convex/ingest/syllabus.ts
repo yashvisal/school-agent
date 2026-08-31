@@ -105,7 +105,7 @@ export const run = internalAction({
           ...(source.semesterStart ? { start: source.semesterStart } : {}),
           ...(source.semesterEnd ? { end: source.semesterEnd } : {}),
         }),
-        prompt: documentPrompt(markdown, args.filename),
+        prompt: documentPrompt(markdown, filename),
       })
 
       const courseId = args.courseId ?? courseIdOf(source.config)

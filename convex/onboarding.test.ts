@@ -180,6 +180,53 @@ describe("resolvePastDeadlines", () => {
 })
 
 describe("approveMany", () => {
+  test("another student's pending change is skipped, not approved", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    // The tenant-isolation branch (CR 3898824600): a foreign id in the batch
+    // must neither approve nor abort the caller's own approvals.
+    const { foreignChange, ownChange } = await t.run(async (ctx) => {
+      const otherStudent = await ctx.db.insert("students", {
+        clerkId: "user_other",
+        timezone: "America/New_York",
+        classBlocks: [],
+        availability: { weekly: [], exceptions: [] },
+        status: "active",
+      })
+      const mkChange = (studentId: Id<"students">) =>
+        ctx.db.insert("changes", {
+          studentId,
+          kind: "chat_decision" as const,
+          entity: { table: "deadlines" as const },
+          after: {},
+          origin: "syllabus" as const,
+          tier: "needs_approval" as const,
+          status: "pending" as const,
+          snapshotIds: [],
+          createdAt: Date.now(),
+        })
+      return {
+        foreignChange: await mkChange(otherStudent),
+        ownChange: await mkChange(seeded.studentId),
+      }
+    })
+
+    const result = await t
+      .withIdentity({ subject: CLERK_ID })
+      .mutation(api.changes.approveMany, {
+        changeIds: [foreignChange, ownChange],
+        via: "web",
+      })
+    expect(result).toEqual({ approved: 1, skipped: 1 })
+    const rows = await t.run(async (ctx) => ({
+      foreign: await ctx.db.get("changes", foreignChange),
+      own: await ctx.db.get("changes", ownChange),
+    }))
+    expect(rows.foreign?.status).toBe("pending")
+    expect(rows.own?.status).toBe("approved")
+  })
+
+
   test("approves pending rows in bulk; resolved rows count as skipped", async () => {
     const t = setupTest()
     const seeded = await seed(t)

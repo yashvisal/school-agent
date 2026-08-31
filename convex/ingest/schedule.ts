@@ -208,7 +208,9 @@ async function loadScheduleInput(
   if (IMAGE_TYPES.has(mediaType)) {
     if (bytes.byteLength > MAX_IMAGE_BYTES) {
       throw new Error(
-        `That image is ${Math.round(bytes.byteLength / 1024 / 1024)}MB; the limit is ` +
+        // One decimal: a 5.4MB upload must not read "5MB; the limit is 5MB"
+        // (CR 3898824576).
+        `That image is ${(bytes.byteLength / 1024 / 1024).toFixed(1)}MB; the limit is ` +
           `${MAX_IMAGE_BYTES / 1024 / 1024}MB. A screenshot is usually far smaller than a photo.`
       )
     }
