@@ -1,3 +1,6 @@
+import type { FunctionReturnType } from "convex/server"
+import type { api } from "@/convex/_generated/api"
+
 /**
  * Face-side mirrors of the Core state model (plans/core.md "State model — facts,
  * minimal"). These are hand-written *until Core ships the schema*; the moment
@@ -201,10 +204,8 @@ export type StudentSignal = {
   provenance: Provenance
 }
 
-/** The identity Convex sees for the signed-in student (`api.auth.viewer`). */
-export type Viewer = {
-  subject: string
-  issuer: string
-  name?: string
-  email?: string
-} | null
+/**
+ * The signed-in student as Core returns it (`api.auth.viewer`; null when signed
+ * out). Derived from codegen so Face can never drift from Core's shape again.
+ */
+export type Viewer = FunctionReturnType<typeof api.auth.viewer>
