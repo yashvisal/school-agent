@@ -2,26 +2,37 @@ import type { FunctionReturnType } from "convex/server"
 import type { api } from "@/convex/_generated/api"
 
 /**
- * Face-side mirrors of the Core state model (plans/core.md "State model — facts,
- * minimal"). These are hand-written *until Core ships the schema*; the moment
- * `convex/schema.ts` lands, delete this file and import `Doc<"courses">` &c.
- * from `convex/_generated/dataModel`.
+ * The Face **view-model** — what panels render, produced by the adapter in
+ * `hooks.ts` from Core's Convex docs (`convex/lib/validators.ts` is the stored
+ * truth; `Doc<"courses">` &c. come from codegen).
  *
- * Two rules from the plan are load-bearing here and must survive that swap:
- *  - **facts, not inference** (vision §9): nothing derived is stored on a
- *    record. Importance, "hell weeks", pacing — all computed in the view.
+ * This file was originally a stand-in "until the schema lands" slated for
+ * deletion; the schema landed, and it stays — deliberately — because several
+ * fields here are *presentation*, not storage: `accent`, `Change.summary` /
+ * `fields[]` / `toolLabel`, `Source.label` / `detail` / `covers`, the flat
+ * `health` enum, ISO date strings. `hooks.ts` derives all of them per render.
+ *
+ * Two rules from the plan remain load-bearing:
+ *  - **facts, not inference** (vision §9): nothing derived is *stored* on a
+ *    record. Everything derived lives in the hook mapping, recomputable.
  *  - **provenance on every fact** (core.md): `source`, `sourceRef`,
- *    `confidence`, `snapshotId`. The UI shows it on click; see
- *    `components/panels/ProvenancePopover.tsx`.
+ *    `confidence`, `snapshotId`. The UI shows it on click; absent means
+ *    unknown, never zero.
  */
 
 export type Id = string
 
 /* ── enums, exactly as core.md states them ──────────────────────────────── */
 
-export type SourceKind = "canvas" | "ical" | "syllabus" | "site" | "schedule"
+export type SourceKind =
+  | "canvas"
+  | "ical"
+  | "syllabus"
+  | "site"
+  | "schedule"
+  | "calendar"
 
-/** `changes.origin` */
+/** `changes.origin` — mirrors Core's `sourceKindV` */
 export type ChangeOrigin =
   | "canvas"
   | "ical"
@@ -29,6 +40,7 @@ export type ChangeOrigin =
   | "site"
   | "chat"
   | "manual"
+  | "schedule"
 
 export type DeadlineKind =
   | "homework"
@@ -48,20 +60,32 @@ export type ChangeKind =
   | "deadline_added"
   | "deadline_moved"
   | "deadline_removed"
+  | "deadline_updated"
   | "submitted"
   | "grade_posted"
   | "course_added"
+  | "course_updated"
+  | "task_created"
+  | "task_updated"
+  | "availability_updated"
   | "chat_decision"
+  | "other"
+  /** legacy fixture-only kind; Core emits `course_updated` for scheme parses */
   | "grading_scheme_parsed"
 
 /** two-tier apply rule (core.md "Two-tier apply rule") */
 export type ChangeTier = "auto" | "needs_approval"
 
-export type ChangeStatus = "applied" | "pending" | "approved" | "rejected"
+export type ChangeStatus =
+  | "applied"
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "expired"
 
 export type SourceHealth = "healthy" | "degraded" | "failing" | "never_synced"
 
-export type CourseStatus = "active" | "concluded"
+export type CourseStatus = "active" | "concluded" | "hidden"
 
 /* ── provenance ─────────────────────────────────────────────────────────── */
 
@@ -70,11 +94,13 @@ export type Provenance = {
   source: ChangeOrigin
   /** the thing in the source this came from: a Canvas id, a page ref, a URL */
   sourceRef: string
-  /** 0–1. Structured sources are 1; LLM extraction is whatever it reported. */
-  confidence: number
-  snapshotId: Id
-  /** when the snapshot this fact came from was fetched (ISO 8601) */
-  observedAt: string
+  /** 0–1. Structured sources are 1; LLM extraction is whatever it reported.
+   * Absent means UNKNOWN — never render it as 0. */
+  confidence?: number
+  snapshotId?: Id
+  /** when the snapshot this fact came from was fetched (ISO 8601); absent when
+   * Core has no observation timestamp for it */
+  observedAt?: string
 }
 
 /* ── records ────────────────────────────────────────────────────────────── */
@@ -113,7 +139,13 @@ export type Deadline = {
   dueAt: string
   pointsPossible?: number
   category?: string
-  submissionStatus?: "submitted" | "unsubmitted" | "graded"
+  submissionStatus?:
+    | "submitted"
+    | "unsubmitted"
+    | "graded"
+    | "missing"
+    | "excused"
+    | "unknown"
   description?: string
   provenance: Provenance
   /**

@@ -1,10 +1,13 @@
 "use client"
 
 import * as React from "react"
+import { useMutation } from "convex/react"
 import { useDialKit } from "dialkit"
 
 import { Button } from "@/components/harness/atoms/Button"
 import { EmptyState, LoadingRows, SectionHeader, ToolChip } from "@/components/panels/chrome"
+import { api } from "@/convex/_generated/api"
+import type { Id } from "@/convex/_generated/dataModel"
 import { agoLabel, dueLabel, percent } from "@/lib/format"
 import type { Change, Course } from "@/lib/data/types"
 
@@ -150,6 +153,7 @@ export function ChangeFeed({
     appliedVisible: [4, 2, 12, 1] as [number, number, number, number],
   })
 
+  const approve = useMutation(api.changes.approve)
   const [resolved, setResolved] = React.useState<Record<string, string>>({})
   const [showAll, setShowAll] = React.useState(false)
 
@@ -210,12 +214,26 @@ export function ChangeFeed({
               key={change._id}
               change={change}
               course={change.courseId ? byId.get(change.courseId) : undefined}
-              onResolve={(id, action) =>
-                // TODO(core): api.changes.approve / api.changes.propose (origin
-                // "manual") is the durable write; this local record only keeps
-                // the row's fate on screen until that lands.
+              onResolve={(id, action) => {
+                // The local record is optimistic feedback; the subscription
+                // flips the row for real once Core applies it. A failed
+                // approve un-hides the row rather than claiming it landed.
                 setResolved((r) => ({ ...r, [id]: action }))
-              }
+                if (action === "approved") {
+                  approve({ changeId: id as Id<"changes">, via: "web" }).catch(
+                    (error) => {
+                      console.error("changes.approve failed", error)
+                      setResolved((r) =>
+                        Object.fromEntries(
+                          Object.entries(r).filter(([key]) => key !== id)
+                        )
+                      )
+                    }
+                  )
+                }
+                // "Fix" (api.changes.propose, origin "manual") still needs its
+                // inline correction UI; the row deliberately stays visible.
+              }}
             />
           ))}
         </div>
