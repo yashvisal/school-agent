@@ -26,8 +26,14 @@ export default defineHook({
     async "step.completed"(event, ctx) {
       const usage = event.data.usage ?? {}
 
+      // Attribution works for a Photon session AND for the VOICE_DEV_PHONE
+      // dev/eval fallback (resolveStudent handles both); only a session with
+      // neither identity is left unattributed — Core accepts the row anyway.
       let studentId: string | undefined
-      if (sessionPhone(ctx as { session: { auth?: unknown } })) {
+      const attributable =
+        sessionPhone(ctx as { session: { auth?: unknown } }) !== null ||
+        Boolean(process.env.VOICE_DEV_PHONE?.trim())
+      if (attributable) {
         try {
           studentId = (await resolveStudent(ctx as { session: { auth?: unknown } })).studentId
         } catch (error) {
