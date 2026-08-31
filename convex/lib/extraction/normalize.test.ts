@@ -436,4 +436,30 @@ describe("enumerated series collapse", () => {
         .deadlines
     ).toHaveLength(2)
   })
+
+  test("keys are stable when a collapsed series collides with a real undated item, in any order", () => {
+    const real = {
+      title: "Problem Set",
+      kind: "homework" as const,
+      confidence: 0.6,
+      sourceText: "The problem set is a single course-long project.",
+    }
+    const enumerated = series(3, "There will be 6 problem sets in the course.")
+    const keysOf = (deadlines: unknown[]) =>
+      normalizeSyllabusExtraction({
+        extraction: parseSyllabus({ course: { name: "6.0001" }, deadlines }),
+        timezone: NY,
+        source: "syllabus",
+        semester: FALL_2016,
+      }).deadlines.map((d) => `${d.title}=${d.key}`)
+        .sort()
+
+    const a = keysOf([real, ...enumerated])
+    const b = keysOf([...enumerated, real])
+    expect(a).toEqual(b)
+    expect(a).toHaveLength(2)
+    // Neither key is an order-dependent "#2": both are distinguished by their
+    // own quoted provenance.
+    expect(a.some((k) => /#2$/.test(k))).toBe(false)
+  })
 })

@@ -277,6 +277,10 @@ export function normalizeSyllabusExtraction(
   const series = collapseEnumeratedSeries([...extraction.deadlines])
   dropped.push(...series.dropped)
 
+  // Pass 1 — resolve every item (title, quote, date) and drop what fails, so
+  // key assignment below can see the WHOLE surviving set at once.
+  type Resolved = { item: (typeof series.items)[number]; title: string; date?: string; dueAt?: number; base: string }
+  const resolved: Resolved[] = []
   for (const item of series.items) {
     const title = item.title.trim()
     if (title.length === 0) {
@@ -289,19 +293,29 @@ export function normalizeSyllabusExtraction(
       dropped.push({ title, reason: "no verbatim sourceText — unquotable, so unverifiable" })
       continue
     }
-
     const { date, dueAt, drop } = resolveDueAt(item, timezone, semester)
     if (drop) {
       dropped.push({ title, reason: drop })
       continue
     }
+    resolved.push({ item, title, date, dueAt, base: `${source}:${slug(title)}:${date ?? "undated"}` })
+  }
 
-    // Stable across re-extractions of the same document, and unique within one:
-    // the same title on two dates is two items, and a genuine repeat gets a
-    // suffix rather than silently colliding.
-    const base = `${source}:${slug(title)}:${date ?? "undated"}`
-    let key = base
-    for (let n = 2; seen.has(key); n++) key = `${base}#${n}`
+  // Keys are stable across re-extractions of the same document and unique
+  // within one: the same title on two dates is two items. When a title+date is
+  // shared (a collapsed "Problem Set" series beside a real undated "Problem
+  // Set"), EVERY member of the collision gets a discriminator from its own
+  // stable provenance — the quoted sourceText — never from model output order,
+  // so a reordered but otherwise identical extraction yields identical keys
+  // (CR 3899382208). Only true duplicates (same title, date, AND quote) fall
+  // back to a positional #n.
+  const baseCount = new Map<string, number>()
+  for (const entry of resolved) baseCount.set(entry.base, (baseCount.get(entry.base) ?? 0) + 1)
+
+  for (const { item, title, dueAt, base } of resolved) {
+    let key =
+      (baseCount.get(base) ?? 0) > 1 ? `${base}#${slug(item.sourceText).slice(0, 48)}` : base
+    for (let n = 2; seen.has(key); n++) key = `${base}#${slug(item.sourceText).slice(0, 48)}#${n}`
     seen.add(key)
 
     const provenance: Provenance = {
