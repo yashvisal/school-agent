@@ -9,6 +9,40 @@
  */
 
 import type * as auth from "../auth.js";
+import type * as changes from "../changes.js";
+import type * as crons from "../crons.js";
+import type * as dev_fixtures from "../dev/fixtures.js";
+import type * as dev_seed from "../dev/seed.js";
+import type * as http from "../http.js";
+import type * as ingest_canvas from "../ingest/canvas.js";
+import type * as ingest_ical from "../ingest/ical.js";
+import type * as ingest_pollAll from "../ingest/pollAll.js";
+import type * as ingest_snapshots from "../ingest/snapshots.js";
+import type * as ingest_sources from "../ingest/sources.js";
+import type * as lib_auth from "../lib/auth.js";
+import type * as lib_canvas_client from "../lib/canvas/client.js";
+import type * as lib_canvas_linkHeader from "../lib/canvas/linkHeader.js";
+import type * as lib_canvas_normalize from "../lib/canvas/normalize.js";
+import type * as lib_canvas_types from "../lib/canvas/types.js";
+import type * as lib_changes from "../lib/changes.js";
+import type * as lib_diff from "../lib/diff.js";
+import type * as lib_effortPriors from "../lib/effortPriors.js";
+import type * as lib_httpAuth from "../lib/httpAuth.js";
+import type * as lib_ical_parse from "../lib/ical/parse.js";
+import type * as lib_ingest from "../lib/ingest.js";
+import type * as lib_merge from "../lib/merge.js";
+import type * as lib_net from "../lib/net.js";
+import type * as lib_normalized from "../lib/normalized.js";
+import type * as lib_phone from "../lib/phone.js";
+import type * as lib_planner from "../lib/planner.js";
+import type * as lib_signals from "../lib/signals.js";
+import type * as lib_time from "../lib/time.js";
+import type * as lib_validators from "../lib/validators.js";
+import type * as nightly from "../nightly.js";
+import type * as planner from "../planner.js";
+import type * as signals from "../signals.js";
+import type * as students from "../students.js";
+import type * as voice from "../voice.js";
 
 import type {
   ApiFromModules,
@@ -18,6 +52,40 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
+  changes: typeof changes;
+  crons: typeof crons;
+  "dev/fixtures": typeof dev_fixtures;
+  "dev/seed": typeof dev_seed;
+  http: typeof http;
+  "ingest/canvas": typeof ingest_canvas;
+  "ingest/ical": typeof ingest_ical;
+  "ingest/pollAll": typeof ingest_pollAll;
+  "ingest/snapshots": typeof ingest_snapshots;
+  "ingest/sources": typeof ingest_sources;
+  "lib/auth": typeof lib_auth;
+  "lib/canvas/client": typeof lib_canvas_client;
+  "lib/canvas/linkHeader": typeof lib_canvas_linkHeader;
+  "lib/canvas/normalize": typeof lib_canvas_normalize;
+  "lib/canvas/types": typeof lib_canvas_types;
+  "lib/changes": typeof lib_changes;
+  "lib/diff": typeof lib_diff;
+  "lib/effortPriors": typeof lib_effortPriors;
+  "lib/httpAuth": typeof lib_httpAuth;
+  "lib/ical/parse": typeof lib_ical_parse;
+  "lib/ingest": typeof lib_ingest;
+  "lib/merge": typeof lib_merge;
+  "lib/net": typeof lib_net;
+  "lib/normalized": typeof lib_normalized;
+  "lib/phone": typeof lib_phone;
+  "lib/planner": typeof lib_planner;
+  "lib/signals": typeof lib_signals;
+  "lib/time": typeof lib_time;
+  "lib/validators": typeof lib_validators;
+  nightly: typeof nightly;
+  planner: typeof planner;
+  signals: typeof signals;
+  students: typeof students;
+  voice: typeof voice;
 }>;
 
 /**

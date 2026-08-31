@@ -1,0 +1,32 @@
+[
+  {
+    "id": 2001,
+    "name": "Problem Sets",
+    "position": 1,
+    "group_weight": 30,
+    "sis_source_id": null,
+    "integration_data": {},
+    "assignments": [],
+    "rules": { "drop_lowest": 1 }
+  },
+  {
+    "id": 2002,
+    "name": "Labs",
+    "position": 2,
+    "group_weight": 25,
+    "sis_source_id": null,
+    "integration_data": {},
+    "assignments": [],
+    "rules": null
+  },
+  {
+    "id": 2003,
+    "name": "Exams",
+    "position": 3,
+    "group_weight": 45,
+    "sis_source_id": null,
+    "integration_data": {},
+    "assignments": [],
+    "rules": { "drop_lowest": 0, "never_drop": [5006, 5007] }
+  }
+]

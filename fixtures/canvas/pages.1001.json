@@ -1,0 +1,26 @@
+[
+  {
+    "page_id": 8021,
+    "url": "course-syllabus",
+    "title": "Course Syllabus",
+    "created_at": "2026-08-20T15:10:00Z",
+    "updated_at": "2026-08-27T09:40:00Z",
+    "hide_from_students": false,
+    "editing_roles": "teachers",
+    "published": true,
+    "front_page": true,
+    "locked_for_user": false
+  },
+  {
+    "page_id": 8022,
+    "url": "office-hours",
+    "title": "Office Hours and Help Sessions",
+    "created_at": "2026-08-21T15:10:00Z",
+    "updated_at": "2026-09-04T12:00:00Z",
+    "hide_from_students": false,
+    "editing_roles": "teachers",
+    "published": true,
+    "front_page": false,
+    "locked_for_user": false
+  }
+]
