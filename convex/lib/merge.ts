@@ -177,6 +177,78 @@ export function reconcileIcalWithCanvas(
   return { proposals, unmatched, matchedKeys, fuzzyKeys }
 }
 
+// ---------------------------------------------------------------------------
+// LLM extraction (syllabus / course site) vs. what state already holds
+// ---------------------------------------------------------------------------
+
+/**
+ * What to do with one extracted deadline, given the deadlines already stored
+ * for the same course.
+ *
+ * - `duplicate` — Canvas (or an earlier parse) already has this item on this
+ *   day. The syllabus adds nothing, so nothing is proposed. Silence here is
+ *   correct: precedence says syllabus never outranks Canvas on dates, so a
+ *   re-statement of the same date is not news.
+ * - `moved` — same item, different day. NOT applied: the syllabus loses to
+ *   Canvas on dates, and "loses" does not mean "is discarded", it means the
+ *   disagreement is surfaced. Always `conflict: true` → `needs_approval`.
+ * - `new` — no counterpart. A genuinely new deadline the feeds never carried
+ *   (dated readings and psets that live only in the syllabus are the whole
+ *   reason adapter #3 exists).
+ */
+export type ExtractedMatch =
+  | { outcome: "duplicate"; existing: ExistingDeadlineRef }
+  | { outcome: "moved"; existing: ExistingDeadlineRef }
+  | { outcome: "new" }
+
+/**
+ * Match an extracted deadline against existing rows **of the same course**.
+ *
+ * The caller narrows `existing` to one course before calling: a syllabus is a
+ * per-course document, and "Problem Set 3" exists in half the student's
+ * courses, so a title match across courses would suppress real work.
+ *
+ * `sameDay` is injected rather than computed here because "the same day" is a
+ * question about the student's wall clock — a syllabus states a date, and this
+ * module has no timezone. Callers pass a comparison in the student's zone.
+ */
+export function matchExtractedDeadline(
+  deadline: NormalizedDeadline,
+  existing: ExistingDeadlineRef[],
+  sameDay: (a: number, b: number) => boolean
+): ExtractedMatch {
+  const title = normalizeTitle(deadline.title)
+  if (title.length === 0) return { outcome: "new" }
+
+  let undatedMatch: ExistingDeadlineRef | undefined
+  let movedCandidate: ExistingDeadlineRef | undefined
+  for (const ref of existing) {
+    if (normalizeTitle(ref.title) !== title) continue
+
+    // The syllabus states no date. Whatever the row has, the syllabus does not
+    // contradict it, so there is nothing to add and nothing to ask about.
+    if (deadline.dueAt === undefined) return { outcome: "duplicate", existing: ref }
+
+    if (ref.dueAt === undefined) {
+      // The row has no date and the syllabus does. That IS a disagreement about
+      // whether a date exists — core.md's "one-sided disagreement" case — but
+      // keep looking for a dated row with the same title first, which would be
+      // the more specific answer.
+      undatedMatch = undatedMatch ?? ref
+      continue
+    }
+    if (sameDay(ref.dueAt, deadline.dueAt)) return { outcome: "duplicate", existing: ref }
+    // Same title, different day — but a course can hold two same-titled rows
+    // ("Quiz" on Oct 1 and Oct 8), so keep scanning: a same-day row later in
+    // the list must win over this one, or iteration order manufactures a
+    // conflict that is not real (CR 3898632555).
+    movedCandidate = movedCandidate ?? ref
+  }
+
+  if (movedCandidate) return { outcome: "moved", existing: movedCandidate }
+  return undatedMatch ? { outcome: "moved", existing: undatedMatch } : { outcome: "new" }
+}
+
 function findFuzzyMatch(
   deadline: NormalizedDeadline,
   existing: ExistingDeadlineRef[]
