@@ -134,5 +134,7 @@ export function codedError(
   if (!match) return null
   const status = Number(match[1])
   if (!CODED_STATUSES.has(status)) return null
-  return { status, message: match[2].trim() || message }
+  // An empty detail must NOT fall back to the full wrapped message — that is
+  // the internal-detail leak this whole function exists to prevent.
+  return { status, message: match[2].trim() || "request failed" }
 }
