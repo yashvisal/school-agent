@@ -1,0 +1,32 @@
+[
+  {
+    "id": 2201,
+    "name": "Homework",
+    "position": 1,
+    "group_weight": 35,
+    "sis_source_id": null,
+    "integration_data": {},
+    "assignments": [],
+    "rules": { "drop_lowest": 2 }
+  },
+  {
+    "id": 2202,
+    "name": "Readings",
+    "position": 2,
+    "group_weight": 5,
+    "sis_source_id": null,
+    "integration_data": {},
+    "assignments": [],
+    "rules": null
+  },
+  {
+    "id": 2203,
+    "name": "Exams",
+    "position": 3,
+    "group_weight": 60,
+    "sis_source_id": null,
+    "integration_data": {},
+    "assignments": [],
+    "rules": null
+  }
+]

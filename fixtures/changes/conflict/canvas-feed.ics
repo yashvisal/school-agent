@@ -1,0 +1,68 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+CALSCALE:GREGORIAN
+PRODID:-//Instructure//Canvas//EN
+X-WR-CALNAME:Fixture Student Canvas Feed
+BEGIN:VEVENT
+DTSTAMP:20260901T120000Z
+UID:event-assignment-5101
+DTSTART:20260916T035900Z
+DTEND:20260916T035900Z
+SUMMARY:Assignment 1: Sorting [CS201]
+DESCRIPTION:Implement three comparison sorts and benchmark them. Submit a
+ zip with your Java sources and the benchmark writeup\; late work is accept
+ ed for 48 hours at a 10% penalty.
+URL:https://canvas.example.edu/courses/1002/assignments/5101
+CLASS:PUBLIC
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260901T120000Z
+UID:event-assignment-5107
+DTSTART:20261027T163000Z
+DTEND:20261027T163000Z
+SUMMARY:Midterm Exam [CS201]
+DESCRIPTION:Online and proctored\, in Gross Hall 103.
+URL:https://canvas.example.edu/courses/1002/assignments/5107
+CLASS:PUBLIC
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260901T120000Z
+UID:event-assignment-5201
+DTSTART:20260914T035900Z
+DTEND:20260914T035900Z
+SUMMARY:Homework 1: Exploratory Data Analysis [STA210]
+DESCRIPTION:Quarto document\, knitted to PDF.
+URL:https://canvas.example.edu/courses/1003/assignments/5201
+CLASS:PUBLIC
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260901T120000Z
+UID:event-assignment-5006
+DTSTART:20261023T171500Z
+DTEND:20261023T171500Z
+SUMMARY:Midterm Exam [BIO201]
+DESCRIPTION:In class\, Bio Sci 111. Covers chapters 1-9.
+URL:https://canvas.example.edu/courses/1001/assignments/5006
+CLASS:PUBLIC
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260901T120000Z
+UID:event-calendar-event-9001
+DTSTART;TZID=America/New_York:20260908T101500
+DTEND;TZID=America/New_York:20260908T113000
+SUMMARY:BIO 201 Lecture [BIO201]
+LOCATION:Biological Sciences 111
+DESCRIPTION:Tuesday/Thursday lecture.
+CLASS:PUBLIC
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260901T120000Z
+UID:event-calendar-event-9002
+DTSTART;TZID=America/New_York:20260908T133000
+DTEND;TZID=America/New_York:20260908T144500
+SUMMARY:CS 201 Lecture [CS201]
+LOCATION:Gross Hall 103
+DESCRIPTION:Tuesday/Thursday lecture.
+CLASS:PUBLIC
+END:VEVENT
+END:VCALENDAR

@@ -1,0 +1,37 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+CALSCALE:GREGORIAN
+PRODID:-//Example Study Group//Planner 1.0//EN
+X-WR-CALNAME:Study Group + Deadlines
+BEGIN:VEVENT
+DTSTAMP:20261001T090000Z
+UID:2026-outline@studygroup.example
+DTSTART;VALUE=DATE:20261102
+DTEND;VALUE=DATE:20261103
+SUMMARY:Term paper outline [STA210]
+DESCRIPTION:One page\, thesis plus sources.
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20261001T090000Z
+UID:2026-groupmeet@studygroup.example
+DTSTART;TZID=America/New_York:20261103T190000
+DTEND;TZID=America/New_York:20261103T203000
+SUMMARY:Stats study group
+LOCATION:Perkins 218
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20261001T090000Z
+UID:2026-scholarship@financialaid.example
+DTSTART:20261120T045959Z
+SUMMARY:Scholarship application deadline
+DESCRIPTION:Upload transcript\, essay\, and two letters through the portal
+ . Nothing is accepted after midnight.
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20261001T090000Z
+UID:legacy-import-88@planner.example
+DTSTART:20261012T035900Z
+SUMMARY:Homework 3: Multiple Regression
+DESCRIPTION:Imported from an older planner\; duplicates the Canvas item.
+END:VEVENT
+END:VCALENDAR

@@ -1,0 +1,32 @@
+[
+  {
+    "id": 8001,
+    "uuid": "fixtureFile8001",
+    "folder_id": 4200,
+    "display_name": "BIO201-syllabus.pdf",
+    "filename": "BIO201-syllabus.pdf",
+    "content-type": "application/pdf",
+    "url": "https://canvas.example.edu/files/8001/download?download_frd=1",
+    "size": 184320,
+    "created_at": "2026-08-20T15:00:00Z",
+    "updated_at": "2026-08-20T15:00:00Z",
+    "locked": false,
+    "hidden": false,
+    "mime_class": "pdf"
+  },
+  {
+    "id": 8002,
+    "uuid": "fixtureFile8002",
+    "folder_id": 4200,
+    "display_name": "mendelian-genetics-slides.pdf",
+    "filename": "mendelian-genetics-slides.pdf",
+    "content-type": "application/pdf",
+    "url": "https://canvas.example.edu/files/8002/download?download_frd=1",
+    "size": 2411008,
+    "created_at": "2026-09-02T13:05:00Z",
+    "updated_at": "2026-09-02T13:05:00Z",
+    "locked": false,
+    "hidden": false,
+    "mime_class": "pdf"
+  }
+]
