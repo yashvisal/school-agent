@@ -40,6 +40,29 @@ it. Small PRs, daily, Core merges first when the schema changes.
 - Test data: `fixtures/` (gitignored until scrubbed) holds the founder's Duke Canvas snapshots,
   syllabi, schedule, and synthetic change scenarios. It's stale data — see vision §7.
 
+## UI tooling — use these without being asked (Face, and anyone touching `app/`)
+
+Both are mounted dev-only via `components/dev-tools.tsx`; neither ships to production.
+
+- **Agentation** (`agentation` + MCP server `agentation-mcp`, port 4747) — the founder's
+  visual feedback channel. He clicks elements in the running app and leaves notes; they sync to
+  you through the MCP tools. **At the start of any UI task, and whenever you're told "I left
+  notes," call `agentation_get_all_pending`** (or `agentation_watch_annotations` while iterating).
+  Each annotation carries the selector, element path, bounding box, and comment — go straight to
+  that code. When you've addressed one, `agentation_resolve` it; if you disagree or need a
+  decision, `agentation_reply`. Never leave pending annotations unacknowledged at the end of a
+  UI PR. The `agentation-self-driving` skill is for *you* to critique a page autonomously
+  (headed browser) when asked to "review the UI".
+- **DialKit** (`dialkit` + `motion`) — live parameter tuning. **Whenever you build or restyle a
+  component with judgment-dependent values** — spacing, radius, blur, durations, easings,
+  stagger, colour accents, thresholds — wrap them in `useDialKit("Name", {...})` so the founder
+  can tune in the browser instead of round-tripping through code. Use `id` + `persist: true`
+  for panels shared across pages. Once values are settled, bake them into tokens/constants and
+  remove the hook (or leave it if the surface is still being designed). The Beautiful UI
+  harness already uses DialKit — keep it when forking.
+- Rule of thumb: Agentation is for *what's wrong*, DialKit is for *how much*. Tone regressions
+  and layout bugs → expect Agentation notes. Motion/feel/density → offer DialKit dials.
+
 ## Commands
 
 `pnpm dev` (Next + eve), `npx convex dev` (backend), `pnpm typecheck`, `pnpm lint`, `clerk doctor`.

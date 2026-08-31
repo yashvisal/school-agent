@@ -8,7 +8,7 @@ Where the student looks, reads, fixes, and works — visited when needed, often 
 
 ## Shell: forked agent harness
 
-Fork [Beautiful UI](https://github.com/slev12397/beautiful-ui) (MIT, Next.js + Tailwind v4) as the app shell: **nav sidebar | viewport | adaptive rail**. Copy `components/primitives/*` (thinking state, streaming text, approval cards, tool chips, records/diff tables, prompt bar), the `IceCreamHarness.tsx` arrangement, and the design tokens in `globals.css`; keep tokens/radii/hairline borders intact. Strip: PostHog, sounds (cuelume), dialkit; swap the commercial `@central-icons-react` set for open icons. Replace the demo `SCENARIOS` with Convex queries/actions — real-time subscriptions drive streaming and progress primitives directly.
+Fork [Beautiful UI](https://github.com/slev12397/beautiful-ui) (MIT, Next.js + Tailwind v4) as the app shell: **nav sidebar | viewport | adaptive rail**. Copy `components/primitives/*` (thinking state, streaming text, approval cards, tool chips, records/diff tables, prompt bar), the `IceCreamHarness.tsx` arrangement, and the design tokens in `globals.css`; keep tokens/radii/hairline borders intact. Strip: PostHog, sounds (cuelume); **keep DialKit** (we use it — see CLAUDE.md "UI tooling"); swap the commercial `@central-icons-react` set for open icons. Replace the demo `SCENARIOS` with Convex queries/actions — real-time subscriptions drive streaming and progress primitives directly.
 
 Primitive → product mapping: approval cards → change feed (two-tier approvals); tool chips → core actions ("polled Canvas", "parsed syllabus"); diff tables → deadlines with changes; Context rail → provenance on every fact; Tasks rail → this course's plan (read-only, from Core).
 
