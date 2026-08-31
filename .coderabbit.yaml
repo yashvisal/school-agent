@@ -1,0 +1,29 @@
+# CodeRabbit config — https://docs.coderabbit.ai/reference/configuration
+language: en-US
+reviews:
+  profile: assertive
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  path_instructions:
+    - path: "convex/**"
+      instructions: >
+        Enforce plans/vision.md §10: agents mutate state only via `changes`; every LLM call
+        writes a `usage` row; schema stores facts with provenance, never derived scores.
+        Check validators and indexes per convex/_generated/ai/guidelines.md.
+    - path: "agent/voice/**"
+      instructions: >
+        Voice may only touch Core through getFeasibleActions, proposeChange, recordSignal.
+        Flag any other write path, any planning logic in eve-specific APIs, and any tone
+        regression against agent/voice/instructions.md.
+    - path: "agent/workspace/**"
+      instructions: >
+        No planning tools. One sandbox per session (student × course); nothing durable stays
+        in the filesystem — Convex write first, filesystem second.
+    - path: "plans/**"
+      instructions: Decisions must carry reasons; flag removals of stated rationale.
+  path_filters:
+    - "!convex/_generated/**"
+    - "!pnpm-lock.yaml"
+chat:
+  auto_reply: true
