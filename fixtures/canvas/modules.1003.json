@@ -1,0 +1,26 @@
+[
+  {
+    "id": 8211,
+    "workflow_state": "active",
+    "position": 1,
+    "name": "Unit 1: Exploratory Data Analysis",
+    "unlock_at": "2026-08-24T04:00:00Z",
+    "require_sequential_progress": false,
+    "items_count": 4,
+    "items_url": "https://canvas.example.edu/api/v1/courses/1003/modules/8211/items",
+    "state": "started",
+    "published": true
+  },
+  {
+    "id": 8212,
+    "workflow_state": "active",
+    "position": 2,
+    "name": "Unit 2: Regression",
+    "unlock_at": "2026-09-28T04:00:00Z",
+    "require_sequential_progress": false,
+    "items_count": 5,
+    "items_url": "https://canvas.example.edu/api/v1/courses/1003/modules/8212/items",
+    "state": "locked",
+    "published": true
+  }
+]

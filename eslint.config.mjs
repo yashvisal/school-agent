@@ -14,9 +14,12 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Convex codegen output.
     "convex/_generated/**",
-    // eve dev-host artifacts and per-agent node_modules.
-    "agent/**/.eve/**",
+    // eve build/discovery artifacts, per-agent node_modules and scratch (all gitignored).
+    "**/.eve/**",
+    "**/.output/**",
     "agent/**/node_modules/**",
+    "agent/*/.spike/**",
+    ".logs/**",
   ]),
 ]);
 

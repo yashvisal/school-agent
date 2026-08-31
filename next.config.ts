@@ -3,11 +3,11 @@ import { withEve } from "eve/next"
 
 const nextConfig: NextConfig = {}
 
-// Named eve agents mount at /eve/agents/<name>/eve/v1/*.
-// Voice adds `voice: "./agent/voice"` here when Spike A lands — same shape,
-// one entry per agent (agent/ is the eve project root per vision §10).
+// Two eve agents, one Next app (vision §10). Named agents mount under
+// `/eve/agents/<name>/eve/v1/*`.
 export default withEve(nextConfig, {
   agents: {
+    voice: "./agent/voice",
     workspace: "./agent/workspace",
   },
 })

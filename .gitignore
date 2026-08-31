@@ -1,5 +1,5 @@
 # dependencies
-/node_modules
+node_modules/
 /.pnp
 .pnp.*
 .yarn/*
@@ -35,17 +35,32 @@ pnpm-debug.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# test data (founder Duke snapshots, syllabi) — keep out of git until scrubbed
-/fixtures/
+# test data — see fixtures/README.md
+# Founder's real Duke snapshots, syllabi, and schedule stay out of git until
+# scrubbed. Spec-derived fixtures (hand-authored from published API docs, no
+# real student data) are committed. `/fixtures/*` rather than `/fixtures/`
+# because git cannot re-include a path whose parent directory is excluded.
+/fixtures/*
 !/fixtures/.gitkeep
+!/fixtures/README.md
+!/fixtures/canvas/
+!/fixtures/ical/
+!/fixtures/changes/
 !.env.example
 
 .vercel
 
-# eve (agent runtimes): dev caches + auto-installed optional peers
+# eve (agent runtimes): build/discovery artifacts, dev caches, auto-installed optional peers
 agent/**/.eve/
 agent/**/node_modules/
 .eve/
+.output/
+
+# Spike A scratch (jsonl logs, generated attachments)
+agent/voice/.spike/
+
+# local dev/tunnel logs (spike)
+/.logs/
 
 # local lint report
 .lint.json

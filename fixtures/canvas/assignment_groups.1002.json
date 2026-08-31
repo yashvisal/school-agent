@@ -1,0 +1,32 @@
+[
+  {
+    "id": 2101,
+    "name": "Programming Assignments",
+    "position": 1,
+    "group_weight": 40,
+    "sis_source_id": null,
+    "integration_data": {},
+    "assignments": [],
+    "rules": { "drop_lowest": 1 }
+  },
+  {
+    "id": 2102,
+    "name": "Quizzes",
+    "position": 2,
+    "group_weight": 15,
+    "sis_source_id": null,
+    "integration_data": {},
+    "assignments": [],
+    "rules": { "drop_lowest": 2 }
+  },
+  {
+    "id": 2103,
+    "name": "Exams",
+    "position": 3,
+    "group_weight": 45,
+    "sis_source_id": null,
+    "integration_data": {},
+    "assignments": [],
+    "rules": null
+  }
+]

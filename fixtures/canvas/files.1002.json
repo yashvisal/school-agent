@@ -1,0 +1,32 @@
+[
+  {
+    "id": 8101,
+    "uuid": "fixtureFile8101",
+    "folder_id": 4201,
+    "display_name": "CS201-syllabus.pdf",
+    "filename": "CS201-syllabus.pdf",
+    "content-type": "application/pdf",
+    "url": "https://canvas.example.edu/files/8101/download?download_frd=1",
+    "size": 184320,
+    "created_at": "2026-08-20T15:00:00Z",
+    "updated_at": "2026-08-20T15:00:00Z",
+    "locked": false,
+    "hidden": false,
+    "mime_class": "pdf"
+  },
+  {
+    "id": 8102,
+    "uuid": "fixtureFile8102",
+    "folder_id": 4201,
+    "display_name": "sorting-and-asymptotics-slides.pdf",
+    "filename": "sorting-and-asymptotics-slides.pdf",
+    "content-type": "application/pdf",
+    "url": "https://canvas.example.edu/files/8102/download?download_frd=1",
+    "size": 2411008,
+    "created_at": "2026-09-02T13:05:00Z",
+    "updated_at": "2026-09-02T13:05:00Z",
+    "locked": false,
+    "hidden": false,
+    "mime_class": "pdf"
+  }
+]
