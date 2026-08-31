@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 
+import { internal } from "./_generated/api"
 import type { Id } from "./_generated/dataModel"
 import { timingSafeEqual } from "./lib/httpAuth"
 import { localDateToMs } from "./lib/time"
@@ -638,6 +639,18 @@ describe("logUsage", () => {
     // A different step is a different call, and a new row.
     await post(t, "/voice/logUsage", { ...row, idempotencyKey: "wrun_A:turn_0:1" })
     expect(await t.run(async (ctx) => ctx.db.query("usage").take(10))).toHaveLength(2)
+  })
+
+  test("an empty idempotencyKey is no key — never stored, never deduped against", async () => {
+    const t = setupTest()
+    const row = { model: "m", promptTokens: 1, completionTokens: 1 }
+    // Straight at the mutation: the HTTP route already drops "" via asString.
+    const first = await t.mutation(internal.voice.logUsage, { ...row, idempotencyKey: "" })
+    const second = await t.mutation(internal.voice.logUsage, { ...row, idempotencyKey: "  " })
+    expect(second).not.toBe(first)
+    const rows = await t.run(async (ctx) => ctx.db.query("usage").take(10))
+    expect(rows).toHaveLength(2)
+    expect(rows.every((r) => r.idempotencyKey === undefined)).toBe(true)
   })
 
   test("works without a studentId, so a pre-resolution call is still costed", async () => {

@@ -577,7 +577,7 @@ the cron double-fires or the network drops a response.
 | `pending` | Plan stored, not yet sent. A run still `pending` an hour later is treated as stuck and retried. |
 | `triggered` | eve accepted the session. Terminal — never re-sent. |
 | `failed` | eve returned non-2xx, timed out (15s), or the request errored. Retried by a later tick, up to 6 hours after the student's nightly hour. |
-| `skipped` | `EVE_VOICE_URL` or `EVE_VOICE_TOKEN` is unset on this deployment, or the student's timezone is unusable. Expected on dev deployments with no Voice attached; the plan is still computed and stored. Terminal for that student-day. |
+| `skipped` | `EVE_VOICE_URL` or `VOICE_TRIGGER_SECRET` is unset on this deployment, the student has no phone or is not yet warmed (§8 gates), or the student's timezone is unusable. A missing URL and an unusable timezone are terminal for that student-day; the other reasons are recoverable and retried by later ticks in the window. |
 
 ### Manual trigger
 
