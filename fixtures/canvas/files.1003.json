@@ -1,0 +1,32 @@
+[
+  {
+    "id": 8201,
+    "uuid": "fixtureFile8201",
+    "folder_id": 4202,
+    "display_name": "STA210-syllabus.pdf",
+    "filename": "STA210-syllabus.pdf",
+    "content-type": "application/pdf",
+    "url": "https://canvas.example.edu/files/8201/download?download_frd=1",
+    "size": 184320,
+    "created_at": "2026-08-20T15:00:00Z",
+    "updated_at": "2026-08-20T15:00:00Z",
+    "locked": false,
+    "hidden": false,
+    "mime_class": "pdf"
+  },
+  {
+    "id": 8202,
+    "uuid": "fixtureFile8202",
+    "folder_id": 4202,
+    "display_name": "exploratory-data-analysis-slides.pdf",
+    "filename": "exploratory-data-analysis-slides.pdf",
+    "content-type": "application/pdf",
+    "url": "https://canvas.example.edu/files/8202/download?download_frd=1",
+    "size": 2411008,
+    "created_at": "2026-09-02T13:05:00Z",
+    "updated_at": "2026-09-02T13:05:00Z",
+    "locked": false,
+    "hidden": false,
+    "mime_class": "pdf"
+  }
+]

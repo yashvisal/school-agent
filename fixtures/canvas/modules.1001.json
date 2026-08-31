@@ -1,0 +1,26 @@
+[
+  {
+    "id": 8011,
+    "workflow_state": "active",
+    "position": 1,
+    "name": "Unit 1: Mendelian Genetics",
+    "unlock_at": "2026-08-24T04:00:00Z",
+    "require_sequential_progress": false,
+    "items_count": 4,
+    "items_url": "https://canvas.example.edu/api/v1/courses/1001/modules/8011/items",
+    "state": "started",
+    "published": true
+  },
+  {
+    "id": 8012,
+    "workflow_state": "active",
+    "position": 2,
+    "name": "Unit 2: Molecular Genetics",
+    "unlock_at": "2026-09-28T04:00:00Z",
+    "require_sequential_progress": false,
+    "items_count": 5,
+    "items_url": "https://canvas.example.edu/api/v1/courses/1001/modules/8012/items",
+    "state": "locked",
+    "published": true
+  }
+]

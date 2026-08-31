@@ -107,6 +107,7 @@ Merge precedence: Canvas (status/dates) > syllabus (grading scheme) > iCal > sit
 - Syllabus / site / schedule adapters run on whatever real documents the founder supplies; until then, one or two public syllabi from the web.
 - **Deferred to the live-validation pass (first friend's token):** rate limits, real pagination behavior, unpublished/concluded course handling, submission-status edge cases, and the `Link` header in practice. Expect a short fix-up cycle then; design the adapter so the fetch layer is thin and swappable.
 - Canvas per-user token is ToS-gray on institutional instances and may break silently → `sources.health` surfaced in Face.
+- **The live-validation checklist is written and lives at [live-validation.md](./live-validation.md)** — run it the day a real token arrives; it is the deferred list above, made concrete per endpoint.
 
 ## Definition of done
 

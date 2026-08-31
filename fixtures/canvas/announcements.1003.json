@@ -1,0 +1,18 @@
+[
+  {
+    "id": 8231,
+    "title": "Welcome to STA210",
+    "message": "<p>Everything you need is under Modules. Office hours start the second week.</p>",
+    "html_url": "https://canvas.example.edu/courses/1003/discussion_topics/8231",
+    "posted_at": "2026-08-24T12:00:00Z",
+    "last_reply_at": "2026-08-24T12:00:00Z",
+    "delayed_post_at": null,
+    "published": true,
+    "locked": true,
+    "pinned": false,
+    "discussion_type": "side_comment",
+    "assignment_id": null,
+    "context_code": "course_1003",
+    "user_name": "Instructor"
+  }
+]
