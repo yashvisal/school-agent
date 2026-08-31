@@ -555,7 +555,10 @@ traceability only — the plan cache, not the prompt, carries the facts.
 
 ### Gates before the POST
 
-Both are recorded as `skipped` (there is nothing to retry until the student acts):
+Both are recorded as `skipped` — but as *recoverable* skips: nothing can be sent
+until the student acts, so later ticks inside the retry window (`RETRY_WINDOW_HOURS`,
+six hours) reconsider the run and send once the gate opens. Only a missing
+`EVE_VOICE_URL` and an unusable timezone are terminal for the day.
 
 - **No phone on file** — the trigger addresses the thread by number.
 - **Contact not warmed** — `students.inboundCount < 3` (§7b). Photon throttles
