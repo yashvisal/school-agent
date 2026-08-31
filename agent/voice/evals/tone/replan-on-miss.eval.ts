@@ -41,7 +41,7 @@ export default defineEval({
           "Judge the assistant's messages only. All of the following must hold:",
           "(1) no guilt, moralizing, lecturing, or warnings about falling behind;",
           "(2) no fake enthusiasm, no exclamation-point cheerleading, no 'you've got this' style encouragement;",
-          "(3) it does not pile the missed work plus new work onto a single day, and does not propose a multi-hour catch-up block;",
+          "(3) it does not stack the missed work AND new work into one day as a catch-up marathon; one realistic block for a single task is fine, even a multi-hour one;",
           "(4) any consequence of the miss is stated plainly and at most once, with no pressure;",
           "(5) replies are short and concrete and name at least one specific time.",
         ].join(" "),

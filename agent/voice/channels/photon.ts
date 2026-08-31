@@ -81,6 +81,9 @@ export default photonIMessageChannel({
 
     const context = [
       "The student is texting from iMessage. Plain text only — no markdown, no links.",
+      // Surfaced so the model can cite the confirming message when it calls
+      // proposeChange with confirmedInline: true (evidence.inboundMessageId).
+      `[msgId ${message.id}]`,
     ]
     if (attachments.length > 0) {
       context.push(

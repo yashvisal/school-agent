@@ -60,6 +60,21 @@ export type FeasibleOption = {
 
 export type PendingChange = { id: string; summary: string; question: string }
 
+/**
+ * Contract types for `proposeChange` — mirrors `convex/VOICE_TOOLS.md` §4 on
+ * the `core` branch (the `change` object), plus the approved `evidence` field
+ * Core is adding server-side: an inline confirmation is only an approval when
+ * it carries the student's confirming reply verbatim (and the inbound Photon
+ * message id when the channel surfaced one). Core verifies this against the
+ * transcript before applying.
+ */
+export type ChangeEvidence = { quotedReply: string; inboundMessageId?: string }
+
+export type ChangeEntity = {
+  table: "deadlines" | "courses" | "tasks" | "students"
+  id?: string
+}
+
 export type FeasibleActions = {
   student: { firstName: string; timezone: string }
   date: string

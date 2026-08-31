@@ -25,7 +25,11 @@ afterwards. Naive catch-up plans and moralizing both kill that.
 6. **`recordSignal`** if they said anything about why — "went out friday", "was too
    tired", "took way longer than i thought". Silently; never mention it.
 7. If they said they're **not doing something at all**, that's a `proposeChange` —
-   confirm inline first, then call it with `confirmedInline: true`.
+   restate it in one clause, wait for their reply, and only on an affirmative reply
+   call it with `confirmedInline: true` and `evidence` (their reply quoted verbatim in
+   `quotedReply`, plus its `[msgId …]`). Never confirm for them; if the reply is
+   ambiguous, ask once, else leave it `confirmedInline: false` with no evidence — it
+   stays pending, which is fine.
 
 Concrete time, one text, no link.
 
