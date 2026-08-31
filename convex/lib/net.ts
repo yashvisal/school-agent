@@ -41,9 +41,13 @@ export function isBlockedHost(hostname: string): boolean {
     }
     return true // unparseable mapped form: refuse rather than guess
   }
-  // IPv6 loopback / link-local / unique-local.
-  if (host === "::" || host.startsWith("fe80:") || host.startsWith("fc") || host.startsWith("fd")) {
-    return true
+  // IPv6 loopback / link-local / unique-local — gated on a colon, which after
+  // URL normalization only an IPv6 literal contains. Without the gate, public
+  // DNS names starting "fc"/"fd" (fcps.instructure.com, fdu.edu) would be
+  // rejected with no workaround (CR 3897559085).
+  if (host.includes(":")) {
+    if (host === "::" || host.startsWith("fe80:")) return true
+    if (host.startsWith("fc") || host.startsWith("fd")) return true
   }
   return false
 }

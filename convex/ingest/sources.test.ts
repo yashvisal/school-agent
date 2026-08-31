@@ -55,6 +55,15 @@ describe("ical config", () => {
     }
   })
 
+  test("public DNS names that merely start with fc/fd are NOT blocked", () => {
+    // Real institution hosts; the unique-local IPv6 rule must only apply to
+    // IPv6 literals (CR 3897559085).
+    accepts("ical", { url: "https://fcps.instructure.com/feeds/calendars/u.ics" })
+    accepts("ical", { url: "https://fdu.edu/u.ics" })
+    rejects("ical", { url: "http://[fd12:3456::1]/u.ics" }, /private or loopback/)
+    rejects("ical", { url: "http://[fe80::1]/u.ics" }, /private or loopback/)
+  })
+
   test("the calendar kind uses the same url rules", () => {
     accepts("calendar", { url: "https://feeds.example.edu/u.ics" })
     rejects("calendar", { url: "http://127.0.0.1/u.ics" }, /private or loopback/)

@@ -207,7 +207,7 @@ export function diffDeadlines(
         ...base,
         kind: "grade_posted",
         before: toDeadlineFields(before),
-        after,
+        after: { ...after, ...clearedScore },
       })
     } else if (
       statusChanged &&
