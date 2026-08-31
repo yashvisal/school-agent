@@ -177,11 +177,15 @@ export function ChangeFeed({
   const pending = changes.filter(
     (c) => c.status === "pending" && resolved[c._id] !== "approved"
   )
-  /* An approval must leave a trace, not just vanish: until `api.changes.approve`
-   * flips the row's status in Core, keep the locally-approved change visible at
-   * the top of "applied" so the count moves and the student sees a confirmation. */
+  /* An approval must leave a trace, not just vanish: while the mutation is in
+   * flight, keep the locally-approved change visible at the top of "applied".
+   * Only while its durable status is still `pending` — once the subscription
+   * reflects the approval, the second filter carries the row, and keeping the
+   * optimistic copy too would show it twice. */
   const applied = [
-    ...changes.filter((c) => resolved[c._id] === "approved"),
+    ...changes.filter(
+      (c) => resolved[c._id] === "approved" && c.status === "pending"
+    ),
     ...changes.filter((c) => c.status === "applied" || c.status === "approved"),
   ]
   const visibleApplied = showAll
