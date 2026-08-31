@@ -1,0 +1,5 @@
+{
+  "timezone": "America/New_York",
+  "semester": { "start": "2016-09-07", "end": "2016-12-14" },
+  "note": "MIT OCW strips every calendar date. The whole assertion is that NOTHING gets a date: quizzes and psets are named only course-relatively (\"the first quiz\", \"Problem Set 1\"), and \"there will be 6 problem sets\" is one sentence about a series, not six items."
+}

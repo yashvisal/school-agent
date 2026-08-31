@@ -1,0 +1,49 @@
+{
+  "course": {
+    "name": "6.0001 Introduction to Computer Science and Programming in Python",
+    "code": "6.0001"
+  },
+  "gradingScheme": {
+    "categories": [
+      { "name": "Problem sets", "weight": 30 },
+      { "name": "Completion of mandatory finger exercises", "weight": 10 },
+      { "name": "Midterm Quiz", "weight": 20 },
+      { "name": "Final Quiz", "weight": 40 }
+    ],
+    "notes": "Before the final quiz, students may drop up to 2 problem sets. If dropped, the percent that the problem sets are worth will be rolled into the final quiz score."
+  },
+  "deadlines": [
+    {
+      "title": "Midterm Quiz",
+      "kind": "quiz",
+      "confidence": 0.5,
+      "sourceText": "2 closed-book quizzes (notes permitted: 1 page for the midterm quiz, 2 pages for the final quiz)",
+      "pageRef": "Problem Sets"
+    },
+    {
+      "title": "Final Quiz",
+      "kind": "quiz",
+      "confidence": 0.5,
+      "sourceText": "2 closed-book quizzes (notes permitted: 1 page for the midterm quiz, 2 pages for the final quiz)",
+      "pageRef": "Problem Sets"
+    },
+    {
+      "title": "Problem sets",
+      "kind": "homework",
+      "pointsPossible": 10,
+      "category": "Problem sets",
+      "confidence": 0.5,
+      "sourceText": "Each problem set will involve programming in Python. There will be 6 problem sets in the course.",
+      "pageRef": "Problem Sets"
+    },
+    {
+      "title": "Problem Set 1",
+      "kind": "homework",
+      "pointsPossible": 10,
+      "category": "Problem sets",
+      "confidence": 0.5,
+      "sourceText": "Starting with Problem Set 1, additional late days can be accumulated for each assignment, one late day for each day the assignment is turned in ahead of the deadline.",
+      "pageRef": "Late Days"
+    }
+  ]
+}

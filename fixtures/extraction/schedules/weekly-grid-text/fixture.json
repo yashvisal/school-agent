@@ -1,0 +1,5 @@
+{
+  "timezone": "America/New_York",
+  "semester": { "start": "2026-08-24", "end": "2026-12-11" },
+  "note": "Five rows must expand to nine weekly blocks: MWF=3, Th=1, TuTh=2, MW=2, F=1. Tu/Th confusion and half-hour rounding are the failures that matter, because every block is a hard planner constraint."
+}

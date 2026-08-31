@@ -1,0 +1,50 @@
+{
+  "course": {
+    "name": "CS103: Mathematical Foundations of Computing",
+    "code": "CS103"
+  },
+  "gradingScheme": {
+    "categories": [
+      { "name": "Problem Sets", "weight": 20 },
+      { "name": "Exams", "weight": 75 },
+      { "name": "Participation", "weight": 5 }
+    ]
+  },
+  "deadlines": [
+    {
+      "title": "Midterm 1",
+      "kind": "exam",
+      "dueMonthDay": "04-29",
+      "dueTime": "18:00",
+      "confidence": 1,
+      "sourceText": "Midterm 1: Tuesday, April 29, 6:00 - 9:00 PM",
+      "pageRef": "Exam Schedule"
+    },
+    {
+      "title": "Midterm 2",
+      "kind": "exam",
+      "dueMonthDay": "05-20",
+      "dueTime": "18:00",
+      "confidence": 1,
+      "sourceText": "Midterm 2: Tuesday, May 20, 6:00 - 9:00 PM",
+      "pageRef": "Exam Schedule"
+    },
+    {
+      "title": "Final Exam",
+      "kind": "exam",
+      "dueMonthDay": "06-07",
+      "dueTime": "08:30",
+      "confidence": 1,
+      "sourceText": "Final Exam: Saturday June 7, 8:30 - 11:30 AM",
+      "pageRef": "Exam Schedule"
+    },
+    {
+      "title": "Problem Sets",
+      "kind": "homework",
+      "dueTime": "13:00",
+      "confidence": 0.5,
+      "sourceText": "There will be ten total problem sets in CS103, given out once per week. They will be posted on Friday afternoons and are due the following Friday at 1:00 PM Pacific time.",
+      "pageRef": "Problem Sets"
+    }
+  ]
+}

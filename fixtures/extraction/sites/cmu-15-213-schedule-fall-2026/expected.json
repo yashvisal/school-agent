@@ -1,0 +1,96 @@
+{
+  "course": {
+    "name": "Introduction to Computer Systems",
+    "code": "15-213/15-513/14-513"
+  },
+  "deadlines": [
+    {
+      "title": "L0 (cprogramminglab)",
+      "kind": "project",
+      "dueMonthDay": "09-01",
+      "confidence": 1,
+      "sourceText": "L0 due",
+      "pageRef": "Schedule table, Sep 01 row"
+    },
+    {
+      "title": "L1 (datalab)",
+      "kind": "project",
+      "dueMonthDay": "09-08",
+      "confidence": 1,
+      "sourceText": "L1 due",
+      "pageRef": "Schedule table, Sep 08 row"
+    },
+    {
+      "title": "L2 (bomblab)",
+      "kind": "project",
+      "dueMonthDay": "09-15",
+      "confidence": 1,
+      "sourceText": "L2 due, L3 (attacklab) out",
+      "pageRef": "Schedule table, Sep 15 row"
+    },
+    {
+      "title": "L3 (attacklab)",
+      "kind": "project",
+      "dueMonthDay": "09-24",
+      "confidence": 1,
+      "sourceText": "L3 due, L4 (cachelab) out",
+      "pageRef": "Schedule table, Sep 24 row"
+    },
+    {
+      "title": "L4 (cachelab)",
+      "kind": "project",
+      "dueMonthDay": "10-08",
+      "confidence": 1,
+      "sourceText": "L4 due, L5 (malloclab) out",
+      "pageRef": "Schedule table, Oct 08 row"
+    },
+    {
+      "title": "In-class Midterm",
+      "kind": "exam",
+      "dueMonthDay": "10-20",
+      "confidence": 1,
+      "sourceText": "In-class Midterm",
+      "pageRef": "Schedule table, Oct 20 row"
+    },
+    {
+      "title": "L5a (malloc checkpoint)",
+      "kind": "project",
+      "dueMonthDay": "10-27",
+      "confidence": 1,
+      "sourceText": "L5a (malloc checkpoint) due",
+      "pageRef": "Schedule table, Oct 27 row"
+    },
+    {
+      "title": "L5b (malloc final)",
+      "kind": "project",
+      "dueMonthDay": "11-03",
+      "confidence": 1,
+      "sourceText": "L5b (malloc final) due, L6 (tshlab) out",
+      "pageRef": "Schedule table, Nov 03 row"
+    },
+    {
+      "title": "L6 (tshlab)",
+      "kind": "project",
+      "dueMonthDay": "11-12",
+      "confidence": 1,
+      "sourceText": "L6 due, L7 (proxylab) out",
+      "pageRef": "Schedule table, Nov 12 row"
+    },
+    {
+      "title": "L7 (proxylab)",
+      "kind": "project",
+      "dueMonthDay": "11-24",
+      "confidence": 1,
+      "sourceText": "L7 due",
+      "pageRef": "Schedule table, Nov 24 row"
+    },
+    {
+      "title": "L8 (sfslab)",
+      "kind": "project",
+      "dueMonthDay": "12-03",
+      "confidence": 1,
+      "sourceText": "L8 due",
+      "pageRef": "Schedule table, Dec 03 row"
+    }
+  ]
+}
