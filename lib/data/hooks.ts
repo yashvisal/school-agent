@@ -72,7 +72,9 @@ function mapCourse(doc: Doc<"courses">, index: number): Course {
     sourceRefs: doc.sourceRefs,
     gradingScheme: (doc.gradingScheme?.categories ?? []).map((c) => ({
       name: c.name,
-      weight: c.weight ?? 0,
+      // Core stores weights as percentages (Canvas group_weight; extraction
+      // normalizes to percent). The Face view-model is a 0–1 fraction.
+      weight: (c.weight ?? 0) / 100,
       dropRule:
         c.dropLowest !== undefined
           ? `lowest ${c.dropLowest} dropped`
