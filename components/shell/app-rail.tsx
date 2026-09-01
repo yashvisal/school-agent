@@ -156,7 +156,9 @@ function TasksPanel({ courseId }: { courseId?: string }) {
     () =>
       tasks
         ?.filter((t) => (courseId ? t.courseId === courseId : true))
-        .filter((t) => t.status !== "done")
+        // Core serves every status (Face windows client-side); only open work
+        // belongs in the rail — `done` and `skipped` are history, not plan.
+        .filter((t) => t.status !== "done" && t.status !== "skipped")
         .sort((a, b) => (a.plannedFor ?? "").localeCompare(b.plannedFor ?? "")),
     [tasks, courseId]
   )

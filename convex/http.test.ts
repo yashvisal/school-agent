@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 
+import { internal } from "./_generated/api"
 import type { Id } from "./_generated/dataModel"
 import { timingSafeEqual } from "./lib/httpAuth"
 import { localDateToMs } from "./lib/time"
@@ -76,6 +77,7 @@ const ROUTES = [
   "/voice/recordSignal",
   "/voice/logUsage",
   "/voice/resolveStudent",
+  "/voice/recordInbound",
 ] as const
 
 // ---------------------------------------------------------------------------
@@ -333,6 +335,19 @@ describe("proposeChange", () => {
     const t = setupTest()
     const seeded = await seed(t)
 
+    // The cited confirming message is in the inbound log (as the Photon
+    // channel's recordInbound call would have put it).
+    await t.run(async (ctx) => {
+      await ctx.db.insert("inboundMessages", {
+        studentId: seeded.studentId,
+        phone: "+15551234567",
+        messageId: "msg_123",
+        dedupeKey: "photon:msg_123",
+        text: "yeah friday works",
+        receivedAt: Date.now(),
+      })
+    })
+
     const response = await post(t, "/voice/proposeChange", {
       studentId: seeded.studentId,
       change: {
@@ -399,6 +414,88 @@ describe("proposeChange", () => {
     expect(response.status).toBe(400)
     const changes = await t.run(async (ctx) => ctx.db.query("changes").take(10))
     expect(changes).toHaveLength(0)
+  })
+
+  test("a fabricated inboundMessageId is a 400 through the route", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    const response = await post(t, "/voice/proposeChange", {
+      studentId: seeded.studentId,
+      change: {
+        courseId: seeded.courseId,
+        kind: "deadline_added",
+        entity: { table: "deadlines" },
+        after: { title: "Midterm", kind: "exam" },
+        confirmedInline: true,
+        evidence: { quotedReply: "yeah", inboundMessageId: "msg_fabricated" },
+      },
+    })
+    expect(response.status).toBe(400)
+    const deadlines = await t.run(async (ctx) => ctx.db.query("deadlines").take(10))
+    expect(deadlines).toHaveLength(0)
+  })
+})
+
+describe("recordInbound", () => {
+  test("logs, counts toward warmed, and dedupes a redelivery", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+
+    const first = await post(t, "/voice/recordInbound", {
+      phone: "+15551234567",
+      messageId: "msg_a",
+      text: "hey",
+    })
+    expect(first.status).toBe(200)
+    await expect(first.json()).resolves.toMatchObject({
+      ok: true,
+      duplicate: false,
+      studentId: seeded.studentId,
+      warmed: false,
+    })
+
+    // Photon redelivery of the same message: dropped, not double-counted.
+    const replay = await post(t, "/voice/recordInbound", {
+      phone: "+15551234567",
+      messageId: "msg_a",
+      text: "hey",
+    })
+    await expect(replay.json()).resolves.toMatchObject({
+      ok: true,
+      duplicate: true,
+    })
+
+    await post(t, "/voice/recordInbound", { phone: "+15551234567", messageId: "msg_b" })
+    const third = await post(t, "/voice/recordInbound", {
+      phone: "+15551234567",
+      messageId: "msg_c",
+    })
+    // Third distinct inbound message: the contact is warmed.
+    await expect(third.json()).resolves.toMatchObject({ ok: true, warmed: true })
+
+    const student = await t.run(async (ctx) => ctx.db.get("students", seeded.studentId))
+    expect(student?.inboundCount).toBe(3)
+  })
+
+  test("an unknown number is still logged (for dedupe), with no student", async () => {
+    const t = setupTest()
+    await seed(t)
+    const response = await post(t, "/voice/recordInbound", {
+      phone: "+15550000000",
+      messageId: "msg_x",
+    })
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { studentId?: string; duplicate: boolean }
+    expect(body.duplicate).toBe(false)
+    expect(body.studentId).toBeUndefined()
+  })
+
+  test("a missing phone or messageId is a 400", async () => {
+    const t = setupTest()
+    const noPhone = await post(t, "/voice/recordInbound", { messageId: "msg_y" })
+    expect(noPhone.status).toBe(400)
+    const noId = await post(t, "/voice/recordInbound", { phone: "+15551234567" })
+    expect(noId.status).toBe(400)
   })
 })
 
@@ -517,6 +614,43 @@ describe("logUsage", () => {
       model: "anthropic/claude-opus-4-7",
       promptTokens: 1200,
     })
+  })
+
+  test("a replay with the same idempotencyKey returns the existing row, not a second", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    const row = {
+      studentId: seeded.studentId,
+      model: "anthropic/claude-sonnet-5",
+      promptTokens: 14236,
+      completionTokens: 79,
+      sessionId: "wrun_A",
+      idempotencyKey: "wrun_A:turn_0:0",
+    }
+
+    const first = (await (await post(t, "/voice/logUsage", row)).json()) as { usageId: string }
+    // The hook's retry: same key, same step, response to the first POST lost.
+    const second = (await (await post(t, "/voice/logUsage", row)).json()) as { usageId: string }
+
+    expect(second.usageId).toBe(first.usageId)
+    const rows = await t.run(async (ctx) => ctx.db.query("usage").take(10))
+    expect(rows).toHaveLength(1)
+
+    // A different step is a different call, and a new row.
+    await post(t, "/voice/logUsage", { ...row, idempotencyKey: "wrun_A:turn_0:1" })
+    expect(await t.run(async (ctx) => ctx.db.query("usage").take(10))).toHaveLength(2)
+  })
+
+  test("an empty idempotencyKey is no key — never stored, never deduped against", async () => {
+    const t = setupTest()
+    const row = { model: "m", promptTokens: 1, completionTokens: 1 }
+    // Straight at the mutation: the HTTP route already drops "" via asString.
+    const first = await t.mutation(internal.voice.logUsage, { ...row, idempotencyKey: "" })
+    const second = await t.mutation(internal.voice.logUsage, { ...row, idempotencyKey: "  " })
+    expect(second).not.toBe(first)
+    const rows = await t.run(async (ctx) => ctx.db.query("usage").take(10))
+    expect(rows).toHaveLength(2)
+    expect(rows.every((r) => r.idempotencyKey === undefined)).toBe(true)
   })
 
   test("works without a studentId, so a pre-resolution call is still costed", async () => {

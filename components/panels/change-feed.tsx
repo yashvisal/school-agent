@@ -1,10 +1,13 @@
 "use client"
 
 import * as React from "react"
+import { useMutation } from "convex/react"
 import { useDialKit } from "dialkit"
 
 import { Button } from "@/components/harness/atoms/Button"
 import { EmptyState, LoadingRows, SectionHeader, ToolChip } from "@/components/panels/chrome"
+import { api } from "@/convex/_generated/api"
+import type { Id } from "@/convex/_generated/dataModel"
 import { agoLabel, dueLabel, percent } from "@/lib/format"
 import type { Change, Course } from "@/lib/data/types"
 
@@ -150,6 +153,7 @@ export function ChangeFeed({
     appliedVisible: [4, 2, 12, 1] as [number, number, number, number],
   })
 
+  const approve = useMutation(api.changes.approve)
   const [resolved, setResolved] = React.useState<Record<string, string>>({})
   const [showAll, setShowAll] = React.useState(false)
 
@@ -173,11 +177,15 @@ export function ChangeFeed({
   const pending = changes.filter(
     (c) => c.status === "pending" && resolved[c._id] !== "approved"
   )
-  /* An approval must leave a trace, not just vanish: until `api.changes.approve`
-   * flips the row's status in Core, keep the locally-approved change visible at
-   * the top of "applied" so the count moves and the student sees a confirmation. */
+  /* An approval must leave a trace, not just vanish: while the mutation is in
+   * flight, keep the locally-approved change visible at the top of "applied".
+   * Only while its durable status is still `pending` — once the subscription
+   * reflects the approval, the second filter carries the row, and keeping the
+   * optimistic copy too would show it twice. */
   const applied = [
-    ...changes.filter((c) => resolved[c._id] === "approved"),
+    ...changes.filter(
+      (c) => resolved[c._id] === "approved" && c.status === "pending"
+    ),
     ...changes.filter((c) => c.status === "applied" || c.status === "approved"),
   ]
   const visibleApplied = showAll
@@ -210,12 +218,26 @@ export function ChangeFeed({
               key={change._id}
               change={change}
               course={change.courseId ? byId.get(change.courseId) : undefined}
-              onResolve={(id, action) =>
-                // TODO(core): api.changes.approve / api.changes.propose (origin
-                // "manual") is the durable write; this local record only keeps
-                // the row's fate on screen until that lands.
+              onResolve={(id, action) => {
+                // The local record is optimistic feedback; the subscription
+                // flips the row for real once Core applies it. A failed
+                // approve un-hides the row rather than claiming it landed.
                 setResolved((r) => ({ ...r, [id]: action }))
-              }
+                if (action === "approved") {
+                  approve({ changeId: id as Id<"changes">, via: "web" }).catch(
+                    (error) => {
+                      console.error("changes.approve failed", error)
+                      setResolved((r) =>
+                        Object.fromEntries(
+                          Object.entries(r).filter(([key]) => key !== id)
+                        )
+                      )
+                    }
+                  )
+                }
+                // "Fix" (api.changes.propose, origin "manual") still needs its
+                // inline correction UI; the row deliberately stays visible.
+              }}
             />
           ))}
         </div>

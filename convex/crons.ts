@@ -21,4 +21,8 @@ crons.cron("nightly plan pass", "0 * * * *", internal.nightly.tick, {})
 
 crons.interval("poll sources", { minutes: 30 }, internal.ingest.pollAll.pollAll, {})
 
+// Inbound-message log TTL (VOICE_TOOLS.md §8b): dedupe rows age out after ~48h;
+// the contact-warmed count lives on `students` and survives the prune.
+crons.interval("prune inbound log", { hours: 6 }, internal.inbound.prune, {})
+
 export default crons

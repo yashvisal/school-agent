@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Outbound attachments from a stateless context — Spike A items 2 and 3.
+ * Outbound attachments from a stateless context â€” Spike A items 2 and 3.
  *
  *   node agent/voice/scripts/send-attachment.mjs [--phone +1...] [--text-only]
  *
@@ -27,16 +27,16 @@ const arg = (name, fallback) => {
   return i >= 0 && args[i + 1] ? args[i + 1] : fallback
 }
 
-const phone = arg("phone", process.env.VOICE_DEMO_PHONE)
+const phone = arg("phone", process.env.VOICE_DEV_PHONE)
 if (!phone) {
-  console.error("Set VOICE_DEMO_PHONE in .env.local, or pass --phone +1...")
+  console.error("Set VOICE_DEV_PHONE in .env.local, or pass --phone +1...")
   process.exit(1)
 }
 
 const spikeDir = join(dirname(fileURLToPath(import.meta.url)), "..", ".spike")
 mkdirSync(spikeDir, { recursive: true })
 
-/** Hand-written single-page PDF — no dependency, ~700 bytes. */
+/** Hand-written single-page PDF â€” no dependency, ~700 bytes. */
 function buildPdf(line) {
   const stream = `BT /F1 14 Tf 60 720 Td (${line.replace(/[()\\]/g, "")}) Tj ET`
   const objects = [

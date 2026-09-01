@@ -2,7 +2,7 @@ import { paginationOptsValidator } from "convex/server"
 import { v } from "convex/values"
 
 import { internalMutation, mutation, query } from "./_generated/server"
-import { requireStudent } from "./lib/auth"
+import { getCurrentStudent, requireStudent } from "./lib/auth"
 import {
   approveChangeInternal,
   expireStaleInternal,
@@ -98,6 +98,27 @@ export const listPending = query({
       )
       .order("desc")
       .paginate(args.paginationOpts)
+  },
+})
+
+/**
+ * The change feed for Face's Dashboard, newest first, identity-scoped
+ * (lib/data/README.md: Face never passes a studentId). Raw `before`/`after`
+ * bags ride along; the diff lines, summary, and tool label are presentation and
+ * are derived client-side in `lib/data/hooks.ts`.
+ */
+export const feed = query({
+  args: { limit: v.optional(v.number()) },
+  returns: v.array(changeDocV),
+  handler: async (ctx, args) => {
+    const student = await getCurrentStudent(ctx)
+    if (!student) return []
+    const limit = clampLimit(args.limit, 50, 200)
+    return await ctx.db
+      .query("changes")
+      .withIndex("by_student_createdAt", (q) => q.eq("studentId", student._id))
+      .order("desc")
+      .take(limit)
   },
 })
 

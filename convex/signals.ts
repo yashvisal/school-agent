@@ -1,7 +1,7 @@
 import { v } from "convex/values"
 
 import { internalMutation, query } from "./_generated/server"
-import { requireStudent } from "./lib/auth"
+import { getCurrentStudent, requireStudent } from "./lib/auth"
 import { recordSignalInternal } from "./lib/signals"
 import {
   provenanceV,
@@ -44,6 +44,34 @@ export const record = internalMutation({
   },
   returns: v.id("studentSignals"),
   handler: async (ctx, args) => await recordSignalInternal(ctx, args),
+})
+
+/**
+ * Newest first, identity-scoped, for Face's Context rail
+ * (lib/data/README.md: raw text + origin + observedAt, no aggregation).
+ */
+export const recent = query({
+  args: {
+    courseId: v.optional(v.id("courses")),
+    limit: v.optional(v.number()),
+  },
+  returns: v.array(signalDocV),
+  handler: async (ctx, args) => {
+    const student = await getCurrentStudent(ctx)
+    if (!student) return []
+    const limit =
+      args.limit === undefined || !Number.isFinite(args.limit) || args.limit < 1
+        ? 50
+        : Math.min(Math.floor(args.limit), 200)
+    const rows = await ctx.db
+      .query("studentSignals")
+      .withIndex("by_student_observedAt", (q) => q.eq("studentId", student._id))
+      .order("desc")
+      .take(limit)
+    return args.courseId === undefined
+      ? rows
+      : rows.filter((s) => s.refs.courseId === args.courseId)
+  },
 })
 
 /** Newest first. Face's "recently discussed" view reads this. */

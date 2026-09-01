@@ -1,13 +1,13 @@
 import { defineTool } from "eve/tools"
 import { z } from "zod"
 
-import { appendSpike, newId } from "../lib/core.js"
+import { proposeChange } from "../lib/core.js"
 import { resolveStudent } from "../lib/students.js"
 
 /**
- * The §4 `change` contract (convex/VOICE_TOOLS.md on the `core` branch), plus
- * the approved `evidence` field. Exported so the confirmation evals assert
- * against the exact shape the tool enforces instead of a hand-copied one.
+ * The §4 `change` contract (convex/VOICE_TOOLS.md), plus the `evidence` field.
+ * Exported so the confirmation evals assert against the exact shape the tool
+ * enforces instead of a hand-copied one.
  */
 export const proposeChangeInputSchema = z
   .object({
@@ -82,19 +82,16 @@ export const proposeChangeInputSchema = z
 export type ProposeChangeInput = z.infer<typeof proposeChangeInputSchema>
 
 /**
- * The only way Voice mutates state (vision §10; convex/VOICE_TOOLS.md §4 on the
- * `core` branch — this schema mirrors that contract's `change` object).
+ * The only way Voice mutates state (vision §10; convex/VOICE_TOOLS.md §4 —
+ * this schema mirrors that contract's `change` object).
  *
  * Everything goes through `changes` at tier `needs_approval`. An inline chat
  * confirmation in the same exchange IS the approval (core.md rule 1) — and it
  * must be evidenced: `confirmedInline: true` requires `evidence.quotedReply`,
  * the student's confirming message quoted verbatim, plus the Photon message id
- * (`evidence.inboundMessageId`) when the channel surfaced one. Core verifies
- * that evidence against the transcript before applying; a claim without
- * evidence is rejected here and would be held `pending` there.
- *
- * SPIKE STUB: appends to `.spike/changes.jsonl`.
- * TODO(core): POST /voice/proposeChange with this same `change` object.
+ * (`evidence.inboundMessageId`) when the channel surfaced one. Core verifies a
+ * supplied `inboundMessageId` against its stored inbound log and rejects a
+ * fabricated citation with a 400.
  */
 export default defineTool({
   description: [
@@ -113,27 +110,15 @@ export default defineTool({
   ].join("\n"),
   inputSchema: proposeChangeInputSchema,
   async execute(input, ctx) {
-    const student = resolveStudent(ctx)
-    const changeId = newId("chg")
-    const status = input.confirmedInline ? "approved" : "pending"
-
-    await appendSpike("changes.jsonl", {
-      at: new Date().toISOString(),
-      changeId,
-      studentId: student.studentId,
-      sessionId: ctx.session.id,
-      surface: "voice",
-      tier: "needs_approval",
-      status,
-      ...input,
-    })
+    const student = await resolveStudent(ctx)
+    const result = await proposeChange(student.studentId, input)
 
     console.info("[voice/proposeChange]", {
-      changeId,
+      changeId: result.changeId,
       kind: input.kind,
-      status,
+      status: result.status,
       evidenced: input.evidence !== undefined,
     })
-    return { changeId, tier: "needs_approval" as const, status }
+    return result
   },
 })

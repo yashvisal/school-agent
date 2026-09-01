@@ -20,6 +20,7 @@ const ORIGIN_LABEL: Record<Provenance["source"], string> = {
   site: "Course site",
   chat: "The thread",
   manual: "You",
+  schedule: "Class schedule",
 }
 
 export function ProvenanceTrigger({
@@ -115,16 +116,23 @@ export function ProvenanceTrigger({
             <div className="flex flex-col gap-1 px-3 py-2.5">
               <Row label="Source" value={ORIGIN_LABEL[provenance.source]} />
               <Row label="Reference" value={provenance.sourceRef} mono />
+              {/* absent means unknown, never 0 (types.ts) — render the third state */}
               <Row
                 label="Confidence"
                 value={
-                  provenance.confidence >= 1
-                    ? "stated, not inferred"
-                    : percent(provenance.confidence)
+                  provenance.confidence === undefined
+                    ? "unknown"
+                    : provenance.confidence >= 1
+                      ? "stated, not inferred"
+                      : percent(provenance.confidence)
                 }
               />
-              <Row label="Snapshot" value={provenance.snapshotId} mono />
-              <Row label="Seen" value={agoLabel(provenance.observedAt)} />
+              {provenance.snapshotId !== undefined && (
+                <Row label="Snapshot" value={provenance.snapshotId} mono />
+              )}
+              {provenance.observedAt !== undefined && (
+                <Row label="Seen" value={agoLabel(provenance.observedAt)} />
+              )}
             </div>
           </div>,
           document.body
