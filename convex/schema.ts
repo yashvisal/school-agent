@@ -4,6 +4,7 @@ import {
   changeFields,
   courseFields,
   deadlineFields,
+  inboundMessageFields,
   materialFields,
   planRunFields,
   snapshotFields,
@@ -68,7 +69,10 @@ export default defineSchema({
     .index("by_course", ["courseId"])
     .index("by_course_externalId", ["courseId", "externalId"]),
 
-  usage: defineTable(usageFields).index("by_student_at", ["studentId", "at"]),
+  usage: defineTable(usageFields)
+    .index("by_student_at", ["studentId", "at"])
+    // Retry-safe logUsage: one row per model step, however many times it is POSTed.
+    .index("by_idempotencyKey", ["idempotencyKey"]),
 
   studentSignals: defineTable(studentSignalFields).index("by_student_observedAt", [
     "studentId",
@@ -78,4 +82,11 @@ export default defineSchema({
   planRuns: defineTable(planRunFields)
     .index("by_student_date", ["studentId", "date"])
     .index("by_operationId", ["operationId"]),
+
+  // Webhook dedupe + contact-warmed counting + inline-confirmation evidence
+  // verification. TTL'd via `inbound.prune` (crons.ts).
+  inboundMessages: defineTable(inboundMessageFields)
+    .index("by_dedupeKey", ["dedupeKey"])
+    .index("by_student_messageId", ["studentId", "messageId"])
+    .index("by_receivedAt", ["receivedAt"]),
 })

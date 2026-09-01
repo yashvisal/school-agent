@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest"
 
 import { api, internal } from "./_generated/api"
 import type { Id } from "./_generated/dataModel"
-import { CLERK_ID, setupTest } from "./test.setup"
+import { CLERK_ID, OTHER_CLERK_ID, setupTest } from "./test.setup"
 
 /**
  * The two-tier apply rule and approval semantics (plans/core.md).
@@ -403,6 +403,18 @@ describe("inline confirmation evidence", () => {
     const t = setupTest()
     const { studentId, courseId } = await seed(t)
 
+    // The confirming message exists in the inbound log — the id is verifiable.
+    await t.run(async (ctx) => {
+      await ctx.db.insert("inboundMessages", {
+        studentId,
+        phone: "+15551230000",
+        messageId: "msg_42",
+        dedupeKey: "photon:msg_42",
+        text: "yeah",
+        receivedAt: Date.now(),
+      })
+    })
+
     await t.mutation(internal.changes.propose, {
       studentId,
       courseId,
@@ -420,6 +432,158 @@ describe("inline confirmation evidence", () => {
     // The Dashboard can render: confirmed in chat: "yeah".
     expect(feed[0].evidence).toEqual({ quotedReply: "yeah", inboundMessageId: "msg_42" })
     expect(feed[0].resolvedVia).toBe("chat")
+  })
+
+  test("an inboundMessageId that is not in the inbound log is rejected", async () => {
+    const t = setupTest()
+    const { studentId, courseId } = await seed(t)
+
+    await expect(
+      t.mutation(internal.changes.propose, {
+        studentId,
+        courseId,
+        kind: "deadline_added",
+        entity: { table: "deadlines" },
+        after: deadlineAfter(courseId, { title: "Fabricated citation" }),
+        origin: "chat",
+        confirmedInline: true,
+        evidence: { quotedReply: "yeah", inboundMessageId: "msg_never_sent" },
+      })
+    ).rejects.toThrow(/400: evidence.inboundMessageId does not match/)
+
+    expect(await countDeadlines(t)).toBe(0)
+  })
+
+  test("another student's message id does not verify — evidence is per-student", async () => {
+    const t = setupTest()
+    const { studentId, courseId } = await seed(t)
+
+    // The message exists, but it belongs to a different student.
+    await t.run(async (ctx) => {
+      const otherId = await ctx.db.insert("students", {
+        clerkId: OTHER_CLERK_ID,
+        timezone: "America/New_York",
+        classBlocks: [],
+        availability: { weekly: [], exceptions: [] },
+        status: "active",
+      })
+      await ctx.db.insert("inboundMessages", {
+        studentId: otherId,
+        phone: "+15559990000",
+        messageId: "msg_theirs",
+        dedupeKey: "photon:msg_theirs",
+        text: "yeah",
+        receivedAt: Date.now(),
+      })
+    })
+
+    await expect(
+      t.mutation(internal.changes.propose, {
+        studentId,
+        courseId,
+        kind: "deadline_added",
+        entity: { table: "deadlines" },
+        after: deadlineAfter(courseId, { title: "Cross-student citation" }),
+        origin: "chat",
+        confirmedInline: true,
+        evidence: { quotedReply: "yeah", inboundMessageId: "msg_theirs" },
+      })
+    ).rejects.toThrow(/400: evidence.inboundMessageId does not match/)
+  })
+
+  test("a chat-origin patch moves the row's provenance to chat", async () => {
+    const t = setupTest()
+    const { studentId, courseId } = await seed(t)
+
+    // A Canvas-applied deadline...
+    const added = await t.mutation(internal.changes.propose, {
+      studentId,
+      courseId,
+      kind: "deadline_added",
+      entity: { table: "deadlines" },
+      after: deadlineAfter(courseId),
+      origin: "canvas",
+    })
+    const deadlineId = await t.run(
+      async (ctx) => (await ctx.db.get("changes", added.changeId))?.entity.id
+    )
+
+    // ...moved in chat: the fact now comes from the thread, and its provenance
+    // must say so — leaving "Canvas, confidence 1" on a chat-asserted value is
+    // exactly the misattribution the §4 rule forbids. Even a smuggled
+    // after.provenance claiming canvas is replaced.
+    const moved = await t.mutation(internal.changes.propose, {
+      studentId,
+      kind: "deadline_moved",
+      entity: { table: "deadlines", id: deadlineId },
+      after: {
+        dueAt: Date.UTC(2026, 8, 16, 3, 59),
+        provenance: { source: "canvas", sourceRef: "assignments/5001", confidence: 1 },
+      },
+      origin: "chat",
+      confirmedInline: true,
+      evidence: { quotedReply: "yeah" },
+    })
+
+    const deadline = await t.run(async (ctx) =>
+      ctx.db.get("deadlines", deadlineId as Id<"deadlines">)
+    )
+    expect(deadline?.dueAt).toBe(Date.UTC(2026, 8, 16, 3, 59))
+    expect(deadline?.provenance.source).toBe("chat")
+    expect(deadline?.provenance.sourceRef).toBe(moved.changeId)
+  })
+
+  test("a chat-origin patch that changes nothing leaves provenance untouched", async () => {
+    const t = setupTest()
+    const { studentId, courseId } = await seed(t)
+
+    const added = await t.mutation(internal.changes.propose, {
+      studentId,
+      courseId,
+      kind: "deadline_added",
+      entity: { table: "deadlines" },
+      after: deadlineAfter(courseId),
+      origin: "canvas",
+    })
+    const deadlineId = await t.run(
+      async (ctx) => (await ctx.db.get("changes", added.changeId))?.entity.id
+    )
+
+    // `after` carries no patchable key, so no stored value moves — and the
+    // row must keep saying Canvas, not get stamped as chat-asserted.
+    await t.mutation(internal.changes.propose, {
+      studentId,
+      kind: "deadline_moved",
+      entity: { table: "deadlines", id: deadlineId },
+      after: {},
+      origin: "chat",
+      confirmedInline: true,
+      evidence: { quotedReply: "yeah" },
+    })
+
+    const deadline = await t.run(async (ctx) =>
+      ctx.db.get("deadlines", deadlineId as Id<"deadlines">)
+    )
+    expect(deadline?.provenance.source).toBe("canvas")
+    expect(deadline?.provenance.confidence).toBe(1)
+  })
+
+  test("a quoted reply with no message id remains accountability-only, and lands", async () => {
+    const t = setupTest()
+    const { studentId, courseId } = await seed(t)
+
+    const result = await t.mutation(internal.changes.propose, {
+      studentId,
+      courseId,
+      kind: "deadline_added",
+      entity: { table: "deadlines" },
+      after: deadlineAfter(courseId, { title: "Quoted only" }),
+      origin: "chat",
+      confirmedInline: true,
+      evidence: { quotedReply: "yes friday works" },
+    })
+    expect(result.status).toBe("approved")
+    expect(await countDeadlines(t)).toBe(1)
   })
 
   test("a change without inline confirmation carries no evidence", async () => {

@@ -1,6 +1,6 @@
 import type { ToolContext } from "eve/tools"
 
-import { demoStudent, type Student } from "./core.js"
+import { resolveStudentByPhone, type ResolvedStudent } from "./core.js"
 
 /**
  * Student identity is NEVER a tool input.
@@ -11,20 +11,13 @@ import { demoStudent, type Student } from "./core.js"
  * `defaultPhotonAuth` sets `principalId: "photon:<author.userId>"` with
  * `issuer: "photon"`, and the iMessage author id is the sender's phone number.
  *
- * TODO(core): replace this map with a Convex lookup on the phone <-> Clerk user
- * <-> student mapping (voice.md M1 #1). The spike's single mapping comes from
- * `VOICE_DEMO_PHONE` so no real phone number is ever committed.
+ * The number resolves to a student through Core's `/voice/resolveStudent`
+ * (phone ↔ Clerk ↔ student mapping lives in Convex, voice.md M1 #1). The Spike
+ * A `VOICE_DEMO_PHONE` fixture map is gone; the one remaining escape hatch is
+ * `VOICE_DEV_PHONE`, which stands in for the principal on channels that have no
+ * Photon auth (`eve dev`'s HTTP channel, `eve eval`) — it still resolves
+ * through Core, so it only works against a seeded deployment.
  */
-function studentsByPhone(): Record<string, Student> {
-  const phone = process.env.VOICE_DEMO_PHONE?.trim()
-  if (!phone) {
-    throw new Error(
-      "VOICE_DEMO_PHONE is not set. Spike A resolves the demo student from the phone number " +
-        "registered with the Photon project; it is deliberately not committed.",
-    )
-  }
-  return { [phone]: demoStudent }
-}
 
 /** `photon:+15551234567` / `+15551234567` -> `+15551234567`. */
 export function normalizePrincipal(principalId: string | undefined | null): string | null {
@@ -48,37 +41,71 @@ function isPhotonPrincipal(auth: AuthLike): boolean {
   return auth?.issuer === "photon" || (auth?.principalId ?? "").startsWith("photon:")
 }
 
+export type Student = ResolvedStudent & { phone: string }
+
 /**
- * Resolve the student for the current session.
- *
- * `initiator` first: on a trigger-started session the initiator is the student
- * the cron picked, and `current` may be the service principal. Falls back to the
- * demo student (loudly) when there is no Photon-issued principal — that is the
- * eve HTTP channel in `eve dev` and in `eve eval`, whose `localDev()` verifier
- * mints a `local-dev` principal, and the bare HTTP channel with no auth at all.
+ * Cache so one turn's several tool calls (and the usage hook's per-step rows)
+ * don't each pay a resolveStudent round trip. Short TTL: `status` (paused) and
+ * re-linked numbers must not stick for long.
  */
-export function resolveStudent(ctx: { session: { auth?: unknown } }): Student {
+const CACHE_TTL_MS = 60_000
+const cache = new Map<string, { value: Student; at: number }>()
+
+async function resolveByPhone(phone: string): Promise<Student> {
+  const hit = cache.get(phone)
+  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value
+  const resolved = await resolveStudentByPhone(phone)
+  const value: Student = {
+    studentId: resolved.studentId,
+    timezone: resolved.timezone,
+    status: resolved.status,
+    phone,
+  }
+  cache.set(phone, { value, at: Date.now() })
+  return value
+}
+
+/** The phone the current session belongs to, or null on a no-auth dev channel. */
+export function sessionPhone(ctx: { session: { auth?: unknown } }): string | null {
   const auth = ctx.session.auth as
     | { initiator?: AuthLike; current?: AuthLike }
     | undefined
-
+  // `initiator` first: on a trigger-started session the initiator is the student
+  // the cron picked, and `current` may be the service principal.
   const photonAuth = [auth?.initiator, auth?.current].find(isPhotonPrincipal)
-  const principal = principalOf(photonAuth)
+  return principalOf(photonAuth)
+}
 
-  if (!principal) {
+/**
+ * Resolve the student for the current session. Throws when the number is not
+ * registered (never fall back to another student — VOICE_TOOLS.md §2) and when
+ * there is no Photon principal and no `VOICE_DEV_PHONE`.
+ */
+export async function resolveStudent(ctx: { session: { auth?: unknown } }): Promise<Student> {
+  let phone = sessionPhone(ctx)
+  if (!phone) {
+    const devPhone = process.env.VOICE_DEV_PHONE?.trim()
+    if (!devPhone) {
+      throw new Error(
+        "No Photon principal on this session and VOICE_DEV_PHONE is unset — cannot resolve a student.",
+      )
+    }
     console.warn(
-      "[voice/students] no Photon principal on this session (eve dev / eval channel); falling back to the demo student",
+      "[voice/students] no Photon principal (eve dev / eval channel); resolving VOICE_DEV_PHONE via Core",
     )
-    return demoStudent
+    phone = devPhone
   }
-
-  const student = studentsByPhone()[principal]
-  if (!student) {
-    throw new Error(
-      `No student is registered for principal …${principal.slice(-4)}. Ask them to sign up first.`,
-    )
+  try {
+    return await resolveByPhone(phone)
+  } catch (error) {
+    const status = (error as { status?: number }).status
+    if (status === 404) {
+      throw new Error(
+        `No student is registered for …${phone.slice(-4)}. Ask them to sign up first.`,
+      )
+    }
+    throw error
   }
-  return student
 }
 
 /** Narrow helper so tools can type `ctx` without importing eve internals. */

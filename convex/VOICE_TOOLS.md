@@ -334,13 +334,15 @@ Do not set it because a statement sounded confident. An unconfirmed inference is
 **Evidence is required.** `confirmedInline: true` without `evidence.quotedReply`
 is a `400` and nothing lands. Quote the student's confirming reply *verbatim*
 ("yeah", "yes friday works") and pass the Photon message id of that reply as
-`inboundMessageId` when you have it. This is **accountability, not proof**: Core
-cannot yet verify the quote, but it is stored on the change and shown in the
-Dashboard feed as `confirmed in chat: "yeah"`, so a claimed approval is always
-visible and contestable by the student. The upgrade path — verifying
-`inboundMessageId` against the stored inbound message log — lands with webhook
-dedupe (the "Needs from Core" list); write real ids now so old approvals become
-verifiable retroactively.
+`inboundMessageId` when you have it (the channel surfaces it as `[msgId …]`).
+
+**A supplied `inboundMessageId` is verified.** Core keeps an inbound message log
+(written by `POST /voice/recordInbound` before every dispatched turn, §7b); an
+id that does not match a logged message *from this student* is a fabricated
+citation, and the whole change is a `400` — nothing lands. A quoted reply with
+no id remains allowed and is accountability-only: it is stored on the change and
+shown in the Dashboard feed as `confirmed in chat: "yeah"`, visible and
+contestable by the student. Always pass the real id when the channel showed one.
 
 A `conflict: true` change is never auto-applied. (Nothing from Voice ever is;
 `conflict` matters for the adapters, and marking it tells the feed *why* the
@@ -450,7 +452,8 @@ eve.
   "completionTokens": 180,
   "costUsd": 0.0234,
   "sessionId": "wrun_A",
-  "at": 1789200000000
+  "at": 1789200000000,
+  "idempotencyKey": "wrun_A:turn_0:1"
 }
 ```
 
@@ -459,7 +462,58 @@ optional, so a call made before the student is resolved is still costed.
 `surface` defaults to `"voice"` (`voice | workspace | ingestion | planner`).
 Negative or non-finite token counts are floored to `0` rather than stored.
 
+**Send `idempotencyKey`, and retry freely.** Use something stable per model
+step — Voice sends `<sessionId>:<turnId>:<stepIndex>`. A replay with a key Core
+has already seen returns the existing `usageId` and inserts nothing, so a write
+that landed but lost its response can be retried without metering the call
+twice. Without a key every POST is a new row.
+
 **Response `200`** — `{ "ok": true, "usageId": "r66g..." }`
+
+---
+
+## 7b. `POST /voice/recordInbound` — *dedupe, warming, and the evidence log*
+
+Called by the Photon channel's `onMessage` **before dispatching a turn**
+(`agent/voice/channels/photon.ts`). Photon delivers webhooks at least once (up
+to 6 attempts, no ordering, no DLQ) and eve does not dedupe, so Core owns the
+seen-set. Three jobs in one write:
+
+1. **Dedupe.** The documented key is `{webhookId}:{message.id}`; eve does not
+   surface the `X-Spectrum-Webhook-Id` header to `onMessage`, so the key
+   degrades to `photon:<messageId>` — equivalent for a single registered
+   webhook, since message ids are unique per message. `duplicate: true` means
+   *do not dispatch* — return `null` from `onMessage`.
+2. **Contact warming.** Each accepted (non-duplicate) inbound bumps
+   `students.inboundCount`. Photon caps a line at 10 replies to a contact who
+   has sent fewer than 3 messages, so the nightly trigger (§8) is gated on
+   `inboundCount ≥ 3`.
+3. **The evidence log.** Rows are what `evidence.inboundMessageId` (§4) is
+   verified against.
+
+Log rows are pruned after ~48h (the dedupe window Photon documents); the
+`inboundCount` and any evidence copied onto a change survive the prune.
+
+**Request**
+
+```json
+{
+  "phone": "+15551234567",
+  "messageId": "msg_2f9c...",
+  "webhookId": "wh_...",
+  "text": "yeah friday works"
+}
+```
+
+`phone` and `messageId` are required. An unknown (or ambiguous) number is still
+logged so its redeliveries dedupe; `studentId` is simply absent from the
+response.
+
+**Response `200`**
+
+```json
+{ "ok": true, "duplicate": false, "studentId": "j57a...", "warmed": true }
+```
 
 ---
 
@@ -469,42 +523,55 @@ Every hour, Core's cron (`crons.ts` → `internal.nightly.tick`) finds each acti
 student whose **local** clock just struck their nightly hour (`nightlyHourLocal`,
 default `4`) and who has no plan run for tomorrow yet — plus, for the six hours
 after that, any student whose run for tomorrow `failed` or is stuck. For each, it
-expires stale
-pending changes, computes tomorrow's plan, stores it as a `planRuns` row, and then
-starts a Voice session:
+expires stale pending changes, computes tomorrow's plan, stores it as a
+`planRuns` row, and then POSTs the **Voice trigger route** — the custom channel
+route `agent/voice/channels/trigger.ts` mounts under `withEve` on the Next
+deployment. (This is the reconciled path: eve's generic `POST /eve/v1/session`
+is *not* used, because a session created there answers on the HTTP channel —
+only the trigger route hands the run to the Photon channel so the composed text
+reaches the student's phone. Spike A kill criterion 1, proven live.)
 
 ```http
-POST {EVE_VOICE_URL}/eve/v1/session
-Authorization: Bearer {EVE_VOICE_TOKEN}
+POST {EVE_VOICE_URL}/eve/agents/voice/eve/v1/trigger
+x-voice-trigger-secret: {VOICE_TRIGGER_SECRET}
 Content-Type: application/json
 
 {
-  "message": "nightly_plan studentId=j57a... date=2026-09-15 planRunId=k82b...",
-  "operationId": "nightly:j57a...:2026-09-15"
+  "phone": "+15551234567",
+  "operationId": "nightly:j57a...:2026-09-15",
+  "kind": "morning",
+  "date": "2026-09-15",
+  "planRunId": "k82b..."
 }
 ```
 
-### The message
+The trigger route resolves the Photon thread from `phone`, starts a session with
+a machine-readable `MORNING PUSH for <date>` prompt, and answers `202` with
+`{ "sessionId": ... }`, which Core stores on the run. **Composition is entirely
+Voice's**: the agent's `getFeasibleActions` call for that `date` returns the
+stored snapshot (`cached: true`, matching `planRunId`), so the morning text and
+every follow-up describe one consistent day. `planRunId` in the body is
+traceability only — the plan cache, not the prompt, carries the facts.
 
-Deliberately a machine-readable trigger line, not prose. Core computes what is
-possible; **composition is entirely yours.** Parse the three key=value pairs:
+### Gates before the POST
 
-- `studentId` — for every subsequent tool call.
-- `date` — the day being planned (tomorrow, in the student's timezone).
-- `planRunId` — the stored snapshot. Call `getFeasibleActions` with the same
-  `studentId` and `date` and you will get that exact snapshot back
-  (`cached: true`, matching `planRunId`).
+Both are recorded as `skipped` — but as *recoverable* skips: nothing can be sent
+until the student acts, so later ticks inside the retry window (`RETRY_WINDOW_HOURS`,
+six hours) reconsider the run and send once the gate opens. Only a missing
+`EVE_VOICE_URL` and an unusable timezone are terminal for the day.
+
+- **No phone on file** — the trigger addresses the thread by number.
+- **Contact not warmed** — `students.inboundCount < 3` (§7b). Photon throttles
+  proactive sends to unwarmed contacts, so onboarding must end with the student
+  texting first (vision §7) and a short back-and-forth.
 
 ### `operationId` and create-once
 
-`operationId` is `nightly:<studentId>:<date>` — stable per student-day. eve's
-session route treats the same `operationId` under the same principal as
-create-once: a retry returns the session it already made rather than dispatching
-again. Core enforces the same invariant on its side (a run already `triggered` is
-never re-POSTed), so **a student cannot receive two morning texts for one day**
-even if the cron double-fires or the network drops a response.
-
-Core reads `sessionId` from the 2xx response body and stores it on the run.
+`operationId` is `nightly:<studentId>:<date>` — stable per student-day. The
+durable invariant is Core's: a run already `triggered` is never re-POSTed
+(`planRuns.operationId`). The trigger route additionally keeps a per-process
+seen-set, so **a student cannot receive two morning texts for one day** even if
+the cron double-fires or the network drops a response.
 
 ### `triggerStatus`
 
@@ -513,7 +580,7 @@ Core reads `sessionId` from the 2xx response body and stores it on the run.
 | `pending` | Plan stored, not yet sent. A run still `pending` an hour later is treated as stuck and retried. |
 | `triggered` | eve accepted the session. Terminal — never re-sent. |
 | `failed` | eve returned non-2xx, timed out (15s), or the request errored. Retried by a later tick, up to 6 hours after the student's nightly hour. |
-| `skipped` | `EVE_VOICE_URL` or `EVE_VOICE_TOKEN` is unset on this deployment, or the student's timezone is unusable. Expected on dev deployments with no Voice attached; the plan is still computed and stored. Terminal for that student-day. |
+| `skipped` | `EVE_VOICE_URL` or `VOICE_TRIGGER_SECRET` is unset on this deployment, the student has no phone or is not yet warmed (§8 gates), or the student's timezone is unusable. A missing URL and an unusable timezone are terminal for that student-day; the other reasons are recoverable and retried by later ticks in the window. |
 
 ### Manual trigger
 
@@ -534,9 +601,19 @@ deployment — dev and prod do not share values:
 
 | Var | Purpose |
 |---|---|
-| `CORE_AGENT_SECRET` | The bearer token every route above requires. Voice needs the same value in its own environment. |
-| `EVE_VOICE_URL` | Base URL of the deployed Voice agent, e.g. `https://voice.example.com`. Unset → nightly runs are `skipped`. |
-| `EVE_VOICE_TOKEN` | Bearer token for eve's session route. Required for `operationId` create-once — eve rejects `operationId` from anonymous callers. Unset while `EVE_VOICE_URL` is set → the run is `skipped` with that reason; Core never POSTs a trigger unauthenticated. |
+| `CORE_AGENT_SECRET` | The bearer token every route above requires. |
+| `EVE_VOICE_URL` | Base URL of the deployment hosting the Voice agent (the Next app, since `withEve` mounts the agent there), e.g. `https://app.example.com` — or a tunnel/localhost in dev. Unset → nightly runs are `skipped`. |
+| `VOICE_TRIGGER_SECRET` | The `x-voice-trigger-secret` value for the trigger route (§8). Unset while `EVE_VOICE_URL` is set → the run is `skipped` with that reason; Core never POSTs a trigger unauthenticated. (Replaces the retired `EVE_VOICE_TOKEN`.) |
+
+And in the **Voice host's** environment (`.env.local` / Vercel project env, the
+process serving the eve agent):
+
+| Var | Purpose |
+|---|---|
+| `CORE_AGENT_SECRET` | Same value as the Convex deployment's — the client in `agent/voice/lib/core.ts` sends it on every call. |
+| `CORE_URL` | Core's HTTP Actions base (`https://<deployment>.convex.site`). Falls back to `NEXT_PUBLIC_CONVEX_SITE_URL`, which co-located deploys already have. |
+| `VOICE_TRIGGER_SECRET` | Same value as the Convex deployment's — the trigger route checks it. |
+| `VOICE_DEV_PHONE` | Optional, dev/evals only: stands in for the Photon principal on channels with no Photon auth. Still resolves through Core. |
 
 ---
 
@@ -552,10 +629,16 @@ routes above.
 | `internal.voice.recordSignal` | internalMutation | Record a signal. |
 | `internal.voice.logUsage` | internalMutation | Log an LLM call. |
 | `internal.voice.resolveStudent` | internalQuery | Phone/Clerk id → student. |
+| `internal.inbound.record` | internalMutation | Inbound log: dedupe + warmed count. |
+| `internal.inbound.prune` | internalMutation | Inbound-log TTL cleanup (cron). |
 | `internal.planner.compute` | internalQuery | Plan for a date, uncached. |
 | `api.planner.feasibleActions` | query | Same, for Face, behind `requireStudent`. |
 | `internal.signals.record` | internalMutation | Signal write for non-Voice surfaces. |
-| `api.signals.list` | query | Recent signals, for Face. |
+| `api.signals.recent` | query | Recent signals, identity-scoped, for Face. |
+| `api.courses.list` / `api.courses.get` | query | Courses, identity-scoped, for Face. |
+| `api.deadlines.list` | query | Deadlines + `pendingChangeId` annotation, for Face. |
+| `api.tasks.list` | query | Tasks, identity-scoped, for Face. |
+| `api.changes.feed` | query | The change feed, identity-scoped, for Face. |
 | `internal.nightly.tick` | internalAction | Hourly cron entry point. |
 | `internal.nightly.runForStudent` | internalAction | One student, one day. |
 | `internal.nightly.runNow` | internalAction | Manual trigger. |

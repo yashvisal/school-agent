@@ -1,9 +1,11 @@
 import { photonIMessageChannel, defaultPhotonAuth } from "eve/channels/photon"
 
+import { recordInbound } from "../lib/core.js"
+
 /**
  * Photon iMessage channel — hand-authored per the documented "configure the
  * channel by hand" path in eve's docs (`docs/channels/photon.mdx`). We do not
- * use Vercel Connect: portable credentials keep the spike host-agnostic.
+ * use Vercel Connect: portable credentials keep the deployment host-agnostic.
  *
  * Webhook route: `/eve/v1/photon`, which under `withEve({ agents: { voice } })`
  * is publicly mounted at `/eve/agents/voice/eve/v1/photon`.
@@ -12,18 +14,20 @@ import { photonIMessageChannel, defaultPhotonAuth } from "eve/channels/photon"
  * (`x-spectrum-signature` / `x-spectrum-timestamp`, 300s window), mark-as-read,
  * and one durable eve session per iMessage conversation.
  *
- * What it does NOT do (ours to build in Core):
- *  - Dedupe. Nothing in eve reads a webhook delivery id, and the Chat SDK state
- *    store is `createMemoryState()` — in-process, lost on restart. Photon
- *    delivers at least once (up to 6 attempts, no ordering guarantee). Dedupe on
- *    `${webhookId}:${message.id}` with a 24-48h TTL belongs in Convex.
- *    TODO(core): persist seen-message ids and drop replays before dispatch.
- *  - Ordering. Out-of-order redelivery is possible and unhandled.
+ * What it does NOT do — and Core therefore does: **dedupe.** Photon delivers at
+ * least once (up to 6 attempts, no ordering guarantee), eve reads no webhook
+ * delivery id, and its Chat SDK state is in-process. So `onMessage` calls
+ * Core's `POST /voice/recordInbound` before dispatching: Convex keys on the
+ * message id (eve does not surface the `X-Spectrum-Webhook-Id` header, so the
+ * documented `${webhookId}:${message.id}` key degrades to the message id —
+ * equivalent for a single registered webhook), TTLs at ~48h, and a duplicate
+ * makes this handler return `null` — no turn, no second reply. The same call
+ * feeds the contact-warmed count that gates the nightly push and the inbound
+ * log that verifies `evidence.inboundMessageId` on inline confirmations.
  *
- * Because of that, `turnPolicy` is `"queue"`, not the default `"steer"`: with
- * `steer`, a Photon *retry* of a message we already answered would cancel a
- * half-composed reply. Queue costs latency on rapid-fire texts and buys us
- * safety until dedupe exists. Revisit once Core dedupes.
+ * `turnPolicy` stays `"queue"`: dedupe removes the retry-cancels-reply hazard,
+ * but queue also keeps rapid-fire real texts from steering a half-composed
+ * reply mid-send, which suits a texting agent.
  */
 /**
  * eve 0.47.3 ships `dist/src/compiled/chat/index.d.ts` referencing a
@@ -52,18 +56,47 @@ export default photonIMessageChannel({
   webhookSecret: process.env.IMESSAGE_WEBHOOK_SECRET,
   turnPolicy: "queue",
 
-  onMessage(_ctx, message) {
+  async onMessage(_ctx, message) {
     if (message.author.isBot) return null
 
-    // Inbound observability for Spike A item 3 (attachments both directions).
-    // Photon webhooks carry attachment *metadata only* — bytes are fetched by
-    // GUID through the SDK. eve's `messageToUserContent` only forwards an
-    // attachment to the model when it has a `url`, and the iMessage adapter
-    // never sets one, so an attachment-only message would otherwise dispatch
-    // NOTHING. We put the metadata into `context` so the model can at least
-    // name what arrived.
+    // Dedupe + inbound log, BEFORE any turn is dispatched. Fail-open on a Core
+    // outage: a duplicate reply is survivable, a student whose real text is
+    // silently dropped is not — and with Core down the tools would fail the
+    // turn loudly anyway.
+    //
+    // Known, accepted window (flagged in review): the log row commits before
+    // eve durably enqueues the turn, so a crash in between makes Photon's
+    // retry look like a duplicate and that message gets no reply. The window
+    // is milliseconds wide and the cost is one dropped text; closing it needs
+    // a claim/finalize handshake with a post-dispatch hook, which is not worth
+    // its complexity at this stage. Revisit if silent drops are ever observed.
+    try {
+      const inbound = await recordInbound({
+        phone: String(message.author.userId),
+        messageId: String(message.id),
+        text: message.text ?? undefined,
+      })
+      if (inbound.duplicate) {
+        console.info("[voice/photon] duplicate delivery dropped", {
+          messageId: message.id,
+        })
+        return null
+      }
+    } catch (error) {
+      console.error(
+        "[voice/photon] recordInbound failed; dispatching without dedupe",
+        String(error),
+      )
+    }
+
+    // Inbound observability for attachments (Spike A item 3). Photon webhooks
+    // carry attachment *metadata only* — bytes are fetched by GUID through the
+    // SDK. eve's `messageToUserContent` only forwards an attachment to the
+    // model when it has a `url`, and the iMessage adapter never sets one, so an
+    // attachment-only message would otherwise dispatch NOTHING. We put the
+    // metadata into `context` so the model can at least name what arrived.
     // TODO(core): fetch bytes via the adapter's attachment handle and hand them
-    // to the ingestion pipeline (PDF/screenshot -> markdown -> `changes`).
+    // to the ingestion pipeline (PDF/screenshot -> markdown -> `changes`), M2.
     const attachments: InboundAttachment[] = message.attachments ?? []
     console.info("[voice/photon] inbound", {
       messageId: message.id,

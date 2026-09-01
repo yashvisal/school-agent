@@ -272,9 +272,23 @@ export const logUsage = internalMutation({
     costUsd: v.optional(v.number()),
     sessionId: v.optional(v.string()),
     at: v.optional(v.number()),
+    idempotencyKey: v.optional(v.string()),
   },
   returns: v.id("usage"),
   handler: async (ctx, args) => {
+    // Idempotent on the caller's key: the Voice hook retries a failed write,
+    // and a POST that landed but lost its response must return the row it
+    // already made rather than meter the same model call twice.
+    // An empty/blank key is no key: it must neither dedupe against other blank
+    // keys nor be persisted, or a retry would still make a second row.
+    const idempotencyKey = args.idempotencyKey?.trim() || undefined
+    if (idempotencyKey) {
+      const existing = await ctx.db
+        .query("usage")
+        .withIndex("by_idempotencyKey", (q) => q.eq("idempotencyKey", idempotencyKey))
+        .first()
+      if (existing) return existing._id
+    }
     const tokens = (n: number) =>
       Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0
     return await ctx.db.insert("usage", {
@@ -289,6 +303,7 @@ export const logUsage = internalMutation({
           : undefined,
       sessionId: args.sessionId,
       at: args.at !== undefined && Number.isFinite(args.at) ? args.at : Date.now(),
+      idempotencyKey,
     })
   },
 })

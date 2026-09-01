@@ -1,48 +1,50 @@
 # `lib/data` — the Face ↔ Core seam
 
-`hooks.ts` is the **only** place the UI touches data. `useViewer()` is already a real Convex
-subscription (`api.auth.viewer`). The others return the fixtures in `fixtures.ts` but are shaped
-exactly like Convex subscriptions — `undefined` while loading, then an array — so swapping each is
-a one-line change and no panel moves. `types.ts` mirrors core.md's state model and is deleted the
-day `convex/schema.ts` lands (import `Doc<"courses">` &c. from `convex/_generated/dataModel`
-instead).
+`hooks.ts` is the **only** place the UI touches data. Every hook is now a **real Convex
+subscription** (`undefined` while loading, then data) plus an adapter that maps Core's docs onto
+the Face view-model in `types.ts`. Panels never see a Convex doc and never import `fixtures.ts`
+(kept only as shape reference / future story data).
 
-Panels never import `fixtures.ts`. If you need new data, add a hook here.
+`types.ts` is **not** deleted now that the schema exists — it is the view-model, and several of
+its fields are presentation Core deliberately does not store (vision §9): `accent`,
+`Change.summary`/`fields[]`/`toolLabel`, `Source.label`/`detail`/`covers`, the flat health enum,
+ISO date strings. All of it is derived in `hooks.ts`, per render, recomputable.
 
-## Needs from Core
+If you need new data, add a hook (and its mapping) here.
 
-Everything below is a **read** unless marked otherwise. All of it is per-student and scoped by the
-Clerk identity server-side — Face never passes a `studentId`.
+## The Core queries (implemented)
 
-| Query                                                             | Args                                                                              | Returns / notes                                                                                                                                                                    |
-| ----------------------------------------------------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `api.courses.list`                                                | `{ status?: "active" \| "concluded" }`                                            | `courses` for the sidebar, filters and workspace headers. Needs `gradingScheme` inline (the workspace renders it) and provenance.                                                    |
-| `api.courses.get`                                                 | `{ courseId }`                                                                    | One course + grading scheme + provenance, for `/courses/[courseId]`.                                                                                                                 |
-| `api.deadlines.list`                                              | `{ from: number, to: number, courseId?: Id<"courses"> }`                          | Deadlines in a window. **Please annotate each with the open `change` touching it** (`pendingChangeId`) so Semester can highlight moved/added/pending without a second round trip.     |
-| `api.tasks.list`                                                  | `{ from: number, to: number, courseId?: Id<"courses"> }`                          | Planned tasks. `plannedFor`, `estEffortMin`, `type`, `status`, `deadlineId`.                                                                                                          |
-| `api.changes.feed`                                                | `{ status?: ChangeStatus[], limit?: number }`                                     | The change feed. Needs `before`/`after` per field (the diff engine has them), `tier`, `origin`, and a short **tool label** ("polled Canvas", "parsed syllabus") for the tool chips.    |
-| `api.sources.list`                                                | `{}`                                                                              | Connector cards: `kind`, `lastPolledAt`, `health`, and which courses each currently feeds. Never any secret material.                                                                 |
-| `api.signals.recent`                                              | `{ courseId?: Id<"courses">, limit?: number }`                                    | `studentSignals` for the Context rail. Raw text + origin + `observedAt`; **no aggregation** (vision §4b).                                                                             |
-| `api.dashboard.recentlyDiscussed` *(nice to have)*                | `{}`                                                                              | The "recently discussed" view core.md promises, so Dashboard ordering stays simple instead of Face inventing a heuristic. face.md open question.                                      |
+All identity-scoped server-side — Face never passes a `studentId`. Signed-out / unprovisioned →
+empty array.
 
-### Mutations Face needs
+| Query                 | Args                        | Notes                                                                                                     |
+| --------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `api.courses.list`    | `{ status? }`               | `hidden` filtered by default. `gradingScheme` inline (`{ categories, notes }` wrapper — adapter flattens). |
+| `api.courses.get`     | `{ courseId }`              | 403 on someone else's course.                                                                              |
+| `api.deadlines.list`  | `{ from?, to?, courseId? }` | ms range on `dueAt`. **Each row annotated with `pendingChangeId`** (the open change touching it, derived in the query). `removed` filtered server-side; the adapter also drops undated rows (no date-shaped surface for them yet). |
+| `api.tasks.list`      | `{ courseId? }`             | Whole active set; Face windows client-side (resolves the old windowing question — a semester of tasks is a few hundred rows). |
+| `api.changes.feed`    | `{ limit? }`                | Raw docs (`before`/`after` bags, `entity`, `createdAt`, `evidence`). Summary / diff lines / tool label are derived in the adapter. |
+| `api.ingest.sources.list` | `{}`                    | Config redacted (`token: "[set]"`); `health` is `{ status, message, at }` — adapter maps to the flat enum and derives `label`/`detail`/`covers` (joined from `courses.sourceRefs`). |
+| `api.signals.recent`  | `{ courseId?, limit? }`     | Raw text + origin + `observedAt` (ms); no aggregation (vision §4b).                                        |
 
-| Mutation                    | Args                                                                          | Notes                                                                                                                                                     |
-| --------------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `api.changes.approve`       | `{ changeId }`                                                                | The Approve button on a pending row. Applies the change.                                                                                                    |
-| `api.changes.reject`        | `{ changeId }`                                                                | Dismiss a pending row.                                                                                                                                      |
-| `api.changes.approveMany`   | `{ changeIds: Id<"changes">[] }`                                              | Bulk approve at onboarding (core.md "bulk-approve UI").                                                                                                     |
-| `api.changes.propose`       | `{ ... }` (origin `"manual"`)                                                 | The **Fix** button. Every student edit is a fact fix that flows through `changes` — Face has no other write path (face.md "Design rules", vision §10).       |
-| `api.sources.resync`        | `{ sourceId }`                                                                | The "re-sync" button on a connector card. Should be idempotent / rate-limited.                                                                               |
-| `api.students.updatePrefs`  | `{ phone?, timezone?, availability?, checkInPreference? }`                    | Settings. Currently a static form.                                                                                                                          |
+### Mutations Face needs (unchanged asks; `changes.*` exist)
 
-### Open questions for Core
+| Mutation                  | Status                                                                    |
+| ------------------------- | ------------------------------------------------------------------------- |
+| `api.changes.approve`     | ✅ `{ changeId, via }`                                                     |
+| `api.changes.reject`      | ✅ `{ changeId }`                                                          |
+| `api.changes.approveMany` | still needed for onboarding bulk-approve                                   |
+| `api.changes.propose`     | exists as `internal.changes.propose`; a public `origin: "manual"` wrapper is still needed for the Fix button |
+| `api.ingest.sources.add` / `setEnabled` | ✅                                                          |
+| `api.students.updatePrefs`| still needed for Settings                                                  |
 
-- **Windowing.** `deadlines.list` / `tasks.list` take `from`/`to` above; if Core would rather serve
-  the whole active semester and let Face window it client-side, say so and we'll drop the args.
-- **Provenance shape.** Face assumes `{ source, sourceRef, confidence, snapshotId, observedAt }` on
-  every fact and renders exactly those five in the popover. If `snapshots.fetchedAt` is the real
-  home of `observedAt`, we'd rather have it denormalised onto the fact than join in the client.
-- **Change grouping.** A single syllabus parse produces many `changes`. Face currently shows them
-  as individual rows; a `batchId` would let us render "18 items from CHEM 202's syllabus" as one
-  bulk-approve card, which is what onboarding wants.
+### Known adapter caveats
+
+- **`provenance.observedAt` is absent** — Core stores no per-fact observation timestamp
+  (it lives on the snapshot); the popover hides the "Seen" row. Denormalising
+  `snapshots.fetchedAt` onto facts remains a nice-to-have.
+- **`change.confidence`** comes from `after.provenance.confidence` when the extractor supplied
+  one; otherwise the "N% confident" line simply doesn't render.
+- **`accent`** is a deterministic client-side palette by course index, not stored.
+- **Change grouping** (`batchId` for "18 items from CHEM 202's syllabus") is still open for
+  onboarding.

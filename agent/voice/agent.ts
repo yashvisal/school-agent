@@ -1,5 +1,7 @@
 import { defineAgent } from "eve"
 
+import { MODEL } from "./lib/model.js"
+
 /**
  * Voice — the planning agent, in iMessage.
  *
@@ -11,5 +13,5 @@ import { defineAgent } from "eve"
  * All model calls route through the Vercel AI Gateway (`AI_GATEWAY_API_KEY`).
  */
 export default defineAgent({
-  model: "anthropic/claude-sonnet-5",
+  model: MODEL,
 })

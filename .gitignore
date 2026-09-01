@@ -68,3 +68,6 @@ agent/voice/.spike/
 
 # local lint report
 .lint.json
+
+# local dev tooling (portable binaries, e.g. cloudflared for the trigger tunnel)
+/.tools/

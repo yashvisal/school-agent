@@ -4,6 +4,7 @@ import { v } from "convex/values"
 import { internal } from "./_generated/api"
 import type { Doc, Id } from "./_generated/dataModel"
 import { internalAction, internalMutation, internalQuery } from "./_generated/server"
+import { WARMED_MIN_INBOUND } from "./inbound"
 import type { FeasibleActions } from "./lib/planner"
 import { DEFAULT_HORIZON_DAYS } from "./lib/planner"
 import { addDays, localDate, localParts } from "./lib/time"
@@ -20,8 +21,9 @@ import {
  *
  * Division of labour: **Convex decides who gets a run and what is true; eve
  * decides what to say.** This file computes tomorrow's feasible set, stores it as
- * a `planRuns` snapshot, and pokes eve's session endpoint with an idempotent
- * `operationId`. It composes nothing.
+ * a `planRuns` snapshot, and pokes the Voice trigger route
+ * (`VOICE_TRIGGER_PATH`, see `triggerVoice`) with an idempotent `operationId`.
+ * It composes nothing.
  *
  * Idempotency is layered, because the cron runs hourly and both ends can retry:
  * - `planRuns.operationId` (`nightly:<studentId>:<date>`) is unique per student-day;
@@ -29,8 +31,8 @@ import {
  * - A run already `triggered` never POSTs again.
  * - A run that `failed` (eve down) or is stuck `pending` IS retried, by a later
  *   tick within `RETRY_WINDOW_HOURS` of the student's nightly hour.
- * - eve's `POST /eve/v1/session` honours the same `operationId` for create-once
- *   semantics, so even a double POST returns the first session.
+ * - The trigger route keeps its own per-process `operationId` set, so even a
+ *   double POST inside one deployment instance is absorbed there too.
  *
  * A deployment with no Voice attached (every dev deployment, until Spike A lands)
  * records `triggerStatus: "skipped"` and carries on. Missing Voice is not a
@@ -100,6 +102,7 @@ export const findRun = internalQuery({
       triggerStatus: triggerStatusV,
       computedAt: v.number(),
       voiceSessionId: v.optional(v.string()),
+      error: v.optional(v.string()),
     })
   ),
   handler: async (ctx, args) => {
@@ -113,6 +116,7 @@ export const findRun = internalQuery({
       triggerStatus: run.triggerStatus,
       computedAt: run.computedAt,
       voiceSessionId: run.voiceSessionId,
+      error: run.error,
     }
   },
 })
@@ -268,21 +272,47 @@ export const STUCK_PENDING_MS = 60 * 60 * 1000
 export const RETRY_WINDOW_HOURS = 6
 
 /**
+ * Skip reasons that can clear within the retry window: the student adds a
+ * phone, sends their third text, or the operator sets the missing secret. A
+ * run skipped for one of these is reconsidered by later ticks, so the student
+ * still gets that day's push once the gate opens. Everything else skipped is
+ * genuinely terminal for the day — most importantly `EVE_VOICE_URL not set`
+ * (every dev deployment with no Voice attached) and an unusable timezone,
+ * which retrying would only recompute pointlessly every hour.
+ */
+const RECOVERABLE_SKIP_PREFIXES = [
+  "no phone on file",
+  "contact not warmed",
+  "VOICE_TRIGGER_SECRET not set",
+] as const
+
+export function isRecoverableSkip(error: string | undefined): boolean {
+  return (
+    error !== undefined &&
+    RECOVERABLE_SKIP_PREFIXES.some((prefix) => error.startsWith(prefix))
+  )
+}
+
+/**
  * Whether this tick should (re)start the pass for a student-day.
  *
- * `triggered` and `skipped` are terminal — the student either got their text or
- * this deployment has no Voice to send one. A `failed` run is the whole point of
- * running hourly: eve was down, and the next pass retries (CR 3892156113). A run
- * still `pending` an hour later never reached its trigger and is retried too.
+ * `triggered` is terminal — the student got their text. `skipped` is terminal
+ * unless the reason is a recoverable gate (above). A `failed` run is the whole
+ * point of running hourly: eve was down, and the next pass retries
+ * (CR 3892156113). A run still `pending` an hour later never reached its
+ * trigger and is retried too.
  */
 function shouldRun(
-  existing: { triggerStatus: TriggerStatus; computedAt: number } | null,
+  existing: {
+    triggerStatus: TriggerStatus
+    computedAt: number
+    error?: string
+  } | null,
   now: number
 ): boolean {
   if (!existing) return true
-  if (existing.triggerStatus === "triggered" || existing.triggerStatus === "skipped") {
-    return false
-  }
+  if (existing.triggerStatus === "triggered") return false
+  if (existing.triggerStatus === "skipped") return isRecoverableSkip(existing.error)
   if (existing.triggerStatus === "failed") return true
   return now - existing.computedAt > STUCK_PENDING_MS
 }
@@ -352,6 +382,7 @@ export const tick = internalAction({
           triggerStatus: TriggerStatus
           computedAt: number
           voiceSessionId?: string
+          error?: string
         } | null = await ctx.runQuery(internal.nightly.findRun, {
           operationId: operationIdFor(student._id, date),
         })
@@ -424,12 +455,33 @@ export const runForStudent = internalAction({
       }
     }
 
-    // (d) The trigger.
-    const outcome = await triggerVoice({
+    // (d) The trigger. It needs the student's phone (the Voice trigger route
+    // addresses the Photon thread by number) and is gated on the contact being
+    // warmed: Photon limits a line to 10 replies until a contact has sent ≥3
+    // messages (voice.md "Deliverability"), so a push before that burns the
+    // budget error-texting into a wall. Both gates are `skipped`, not `failed`
+    // — but they are RECOVERABLE skips (`isRecoverableSkip`), so a later tick
+    // inside the retry window reconsiders them once the student acts.
+    const student: Doc<"students"> | null = await ctx.runQuery(internal.students.get, {
       studentId: args.studentId,
-      date: args.date,
-      planRunId: stored.planRunId,
     })
+    const inboundCount = student?.inboundCount ?? 0
+    let outcome: TriggerOutcome
+    if (!student?.phone) {
+      outcome = { triggerStatus: "skipped", error: "no phone on file" }
+    } else if (inboundCount < WARMED_MIN_INBOUND) {
+      outcome = {
+        triggerStatus: "skipped",
+        error: `contact not warmed (${inboundCount}/${WARMED_MIN_INBOUND} inbound)`,
+      }
+    } else {
+      outcome = await triggerVoice({
+        phone: student.phone,
+        date: args.date,
+        planRunId: stored.planRunId,
+        operationId: operationIdFor(args.studentId, args.date),
+      })
+    }
     await ctx.runMutation(internal.nightly.markTrigger, {
       planRunId: stored.planRunId,
       triggerStatus: outcome.triggerStatus,
@@ -474,8 +526,18 @@ export const runNow = internalAction({
 // eve session trigger
 // ---------------------------------------------------------------------------
 
-/** How long the eve session POST may take before it is a failure. */
+/** How long the trigger POST may take before it is a failure. */
 export const EVE_TRIGGER_TIMEOUT_MS = 15_000
+
+/**
+ * The Voice trigger route, as mounted by `withEve` on the Next deployment
+ * (`agent/voice/channels/trigger.ts`). This is the one reconciled trigger path:
+ * eve's generic `POST /eve/v1/session` is NOT used for the nightly, because a
+ * session created there answers on the HTTP channel — only the custom trigger
+ * route hands the run to the Photon channel so the composed text reaches the
+ * student's phone (Spike A kill criterion 1, proven live 2026-08-31).
+ */
+export const VOICE_TRIGGER_PATH = "/eve/agents/voice/eve/v1/trigger"
 
 type TriggerOutcome = {
   triggerStatus: "triggered" | "failed" | "skipped"
@@ -484,42 +546,47 @@ type TriggerOutcome = {
 }
 
 /**
- * `POST /eve/v1/session` with `{ message, operationId }` and a bearer token
- * (`node_modules/eve/docs/channels/eve.mdx`). The same `operationId` under the
- * same principal returns the session eve already created, so a retry from either
- * side is a no-op rather than a second text.
+ * `POST {EVE_VOICE_URL}/eve/agents/voice/eve/v1/trigger` with
+ * `x-voice-trigger-secret` and `{ phone, operationId, kind, date, planRunId }`.
  *
- * The message is a machine-readable trigger line, not prose: composition is
- * eve's job, and Voice reads the plan back through `getFeasibleActions`.
+ * Idempotency is Core's: a run already `triggered` is never re-POSTed (the
+ * `planRuns.operationId` row), and the trigger route's own in-memory
+ * `operationId` set additionally absorbs a same-process retry storm. The body
+ * carries no prose — composition is eve's job; Voice reads the plan back
+ * through `getFeasibleActions`, which returns this exact `planRunId` snapshot.
  */
 async function triggerVoice(args: {
-  studentId: Id<"students">
+  phone: string
   date: string
   planRunId: Id<"planRuns">
+  operationId: string
 }): Promise<TriggerOutcome> {
   const baseUrl = process.env.EVE_VOICE_URL
   if (!baseUrl) {
     return { triggerStatus: "skipped", error: "EVE_VOICE_URL not set" }
   }
-  const token = process.env.EVE_VOICE_TOKEN
+  const secret = process.env.VOICE_TRIGGER_SECRET
   // Fails closed, like `checkBearer` on the way in: a deployment that set the URL
-  // but forgot the token must not POST a student's trigger unauthenticated and
+  // but forgot the secret must not POST a student's trigger unauthenticated and
   // then present a config mistake as a transport failure (CR 3892156246).
-  if (!token) {
-    return { triggerStatus: "skipped", error: "EVE_VOICE_TOKEN not set" }
+  if (!secret) {
+    return { triggerStatus: "skipped", error: "VOICE_TRIGGER_SECRET not set" }
   }
 
-  const operationId = operationIdFor(args.studentId, args.date)
-  const message = `nightly_plan studentId=${args.studentId} date=${args.date} planRunId=${args.planRunId}`
-
   try {
-    const response = await fetch(`${baseUrl.replace(/\/+$/, "")}/eve/v1/session`, {
+    const response = await fetch(`${baseUrl.replace(/\/+$/, "")}${VOICE_TRIGGER_PATH}`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${token}`,
+        "x-voice-trigger-secret": secret,
       },
-      body: JSON.stringify({ message, operationId }),
+      body: JSON.stringify({
+        phone: args.phone,
+        operationId: args.operationId,
+        kind: "morning",
+        date: args.date,
+        planRunId: args.planRunId,
+      }),
       // An application-level deadline: an eve that accepts the connection and
       // never answers must not hold a scheduled run open (CR 3892156254). A
       // timeout aborts the fetch and is recorded as `failed`, so the next
