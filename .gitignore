@@ -46,6 +46,10 @@ next-env.d.ts
 !/fixtures/canvas/
 !/fixtures/ical/
 !/fixtures/changes/
+# Extraction eval fixtures: public course pages (MIT OCW / Stanford / CMU, cited
+# per fixture) plus one synthetic weekly schedule. No student data, and core.md's
+# Definition of done requires them checked in and running in CI.
+!/fixtures/extraction/
 !.env.example
 
 .vercel

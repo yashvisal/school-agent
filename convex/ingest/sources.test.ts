@@ -94,10 +94,44 @@ describe("canvas config", () => {
   })
 })
 
+describe("site config", () => {
+  test("a course-site seed url is accepted", () => {
+    accepts("site", { url: "https://www.cs.cmu.edu/~213/" })
+  })
+
+  test("the seed gets exactly the iCal treatment — it is fetched server-side too", () => {
+    // `ingest/site.ts` fetches the seed AND the same-origin links it finds in
+    // the response, so an unchecked seed is the same SSRF lever as a feed url.
+    rejects("site", {}, /must be a URL/)
+    rejects("site", { url: "http://169.254.169.254/latest/meta-data/" }, /private or loopback/)
+    rejects("site", { url: "https://user:pw@cs.example.edu/213/" }, /credentials/)
+  })
+})
+
+describe("upload configs (syllabus, schedule)", () => {
+  test("an upload needs no url — its config carries Convex references", () => {
+    // Nothing here is ever fetched from the network: `ingest/uploads.ts` sets
+    // `storageId`/`courseId` server-side from the signed-in student's upload.
+    accepts("syllabus", { storageId: "kg2...", courseId: "js7..." })
+    accepts("syllabus", {})
+    accepts("schedule", { storageId: "kg2..." })
+  })
+
+  test("a url is not required, but a supplied one must still be safe", () => {
+    // Not needed today; an unchecked url sitting on a source row is a lever
+    // waiting for the next adapter that decides to fetch it.
+    accepts("syllabus", { url: "https://cs.example.edu/syllabus.html" })
+    rejects("syllabus", { url: "http://127.0.0.1/s.pdf" }, /private or loopback/)
+    rejects("schedule", { url: "file:///etc/passwd" }, /must be http/)
+  })
+})
+
 describe("unsupported kinds", () => {
   test("a kind with no adapter is refused rather than silently stored", () => {
-    rejects("syllabus", { url: "https://x.example/s.pdf" }, /does not accept kind/)
-    rejects("site", {}, /does not accept kind/)
+    // `calendar` is validated (it shares the iCal url rules) but has no adapter
+    // until M2; anything genuinely unknown is refused outright.
+    rejects("dropbox", { url: "https://x.example/s.pdf" }, /does not accept kind/)
+    rejects("email", {}, /does not accept kind/)
   })
 })
 

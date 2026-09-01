@@ -1,0 +1,5 @@
+{
+  "timezone": "America/New_York",
+  "semester": { "start": "2026-08-24", "end": "2026-12-11" },
+  "note": "A dense schedule table. Only the ten lab DUE dates and the in-class midterm are deliverables; the nine 'out' rows, thirteen recitations, six bootcamps, six no-class days and twenty-four lecture readings are all precision traps. Dates are month+day with no year."
+}

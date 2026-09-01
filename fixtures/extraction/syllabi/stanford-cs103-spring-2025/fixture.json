@@ -1,0 +1,5 @@
+{
+  "timezone": "America/Los_Angeles",
+  "semester": { "start": "2025-03-31", "end": "2025-06-11" },
+  "note": "Three exams stated as month+day with NO year — the year must come from the term window, in our code, not from the model. Also a nested exam weighting and a struck-through live edit (\"more than ~~24 hours~~ 48 hours\") that must not become a deadline."
+}

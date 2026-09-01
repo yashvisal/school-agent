@@ -10,6 +10,7 @@ of it is not.** See `plans/core.md`, "Test data & limitations".
 | `fixtures/canvas/`  | Canvas API responses hand-authored from the example JSON in <https://developerdocs.instructure.com/> — courses, assignments (incl. assignment groups/weights), submissions, files/modules/pages/announcements, and `Link`-header pagination samples. Shapes and field names come from the docs, never from memory. |
 | `fixtures/ical/`    | Hand-authored `.ics` files using Canvas's `event-assignment-<id>` UID convention, so the exact-join dedupe against the Canvas adapter is tested.            |
 | `fixtures/changes/` | Synthetic change scenarios derived from the above (deadline moved / added / removed, submission landed) that drive the snapshot → diff → `changes` tests.   |
+| `fixtures/extraction/` | Extraction eval fixtures for the syllabus / course-site / schedule adapters. Each is `source.md` (the document), `fixture.json` (timezone + term window + what it catches), `expected.json` (the **hand-verified** extraction) and a `README.md` citing the source URL. The syllabi and site pages are **public** university course pages; the schedule is synthetic. No student data. |
 
 These contain no personal data and are the reason the whole pipeline can be tested with **no live
 Canvas access**. Keep them that way: if you need a realistic value, invent one.
@@ -73,6 +74,30 @@ npx convex run dev/seed:reset
 A source whose `config` is `{ mode: "fixture" }` makes `internal.ingest.canvas.poll` and
 `internal.ingest.ical.poll` read these instead of the network, so the cron works on a dev
 deployment with no Canvas token at all.
+
+### `fixtures/extraction/` is read by BOTH test layers
+
+```text
+fixtures/extraction/
+  syllabi/mit-6-0001-intro-python-fall-2016/    MIT OCW: a grading table and NOT ONE calendar date
+  syllabi/stanford-cs103-spring-2025/           three exams as month+day with no year; a weekly
+                                                  pset recurrence that must NOT become ten dates
+  sites/cmu-15-213-schedule-fall-2026/          a dense schedule table: 11 deliverables buried in
+                                                  9 release rows, 13 recitations, 6 bootcamps,
+                                                  6 no-class days and 24 lecture readings
+  schedules/weekly-grid-text/                   5 rows that must expand to 9 weekly class blocks
+```
+
+- `pnpm test` (hermetic, gates CI) feeds `expected.json` into the real pipeline as if it were the
+  model's output — `convex/lib/extraction/normalize.test.ts` and `convex/ingest/extracted.test.ts`.
+- `pnpm eval` (needs `AI_GATEWAY_API_KEY`, costs money) runs the real model on `source.md` and
+  scores it against `expected.json` — `evals/extraction.eval.ts`.
+
+The fixtures are the seam between the two, so "what the model is supposed to say" is written down
+once. **`expected.json` is hand-verified against `source.md`, never a saved model run**; a fixture
+that expects whatever the model happened to produce measures nothing. Adding a fixture with no
+`expected.json` makes `pnpm eval` print a draft extraction and skip — a starting point to correct,
+not an answer to accept.
 
 ## Ignored (real data, never committed)
 
