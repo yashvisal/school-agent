@@ -12,14 +12,14 @@ Fork [Beautiful UI](https://github.com/slev12397/beautiful-ui) (MIT, Next.js + T
 
 Primitive → product mapping: approval cards → change feed (two-tier approvals); tool chips → core actions ("polled Canvas", "parsed syllabus"); diff tables → deadlines with changes; Context rail → provenance on every fact; Tasks rail → this course's plan (read-only, from Core).
 
-Every page renders in the viewport with a rail: Dashboard/Semester get Context/Tasks; workspaces add artifact-scoped Chat.
+**Two navigation modes (decided 2026-09-01; vision §8).** *Global mode*: sidebar Dashboard · Semester · Connectors · Settings · courses; viewport + Context/Tasks rail. *Course mode*: clicking a course swaps the sidebar to `← All courses` · Overview · Library · Chats; Overview is the landing page; Chats is a list of persisted per-course eve sessions with "New chat" on top; opening one puts the conversation in the **viewport** (harness-native), rail = Context + Tasks, no Chat tab in the rail. Library is per-course only (no global Library). The first M1 walkthrough built the course as a filtered dashboard with chat in the rail — that was a doc gap, not a thread error; this section is the correction. Designs for both modes live in Paper (see "Design flow") and are reviewed there before building.
 
 **Agent streaming into the harness:** the workspace agent (`agent/workspace`) runs on eve, co-located via `withEve(nextConfig)`, and streams through `useEveAgent()` from `eve/react` — eve's own NDJSON event stream, *not* the AI SDK `useChat` protocol (no official adapter). Messages are `EveMessage[]` with parts `text | reasoning | file | step-start | dynamic-tool | authorization`; tool calls arrive as `dynamic-tool` parts with streaming input, JSON output, and approval states. A thin custom reducer maps these onto the harness primitives (`dynamic-tool` → tool chips / approval cards / diff tables by `toolName`; `text`/`reasoning` → streaming + thinking states). Verified feasible; roughly a day of glue.
 
 ## Milestone 1 scope
 
-1. **Auth + shell** — Clerk; Next.js App Router; sidebar: Dashboard · Semester · Library (stub) · Connectors · Settings · — · one entry per course.
-2. **Onboarding** — connect Canvas token / iCal → drop syllabi (many at once) → **upload weekly class schedule** (image or file; approve the parse in a simple weekly view — these become hard planning boundaries) → optional course URLs → **review pending changes** (bulk approve, fix inline) → briefing → phone capture → "we'll text you tomorrow morning" (first message fires). Payoff must be immediate and visceral. Mid-semester variant: same flow + "mark everything before today done?"
+1. **Auth + shell** — Clerk; Next.js App Router; two-mode sidebar (global / course) as above. **Navigation refactor is the next Face slice, before onboarding** — onboarding ends by dropping the student into a course, so course mode must exist first.
+2. **Onboarding** (after the nav refactor) — two levels: *global* (classes, schedule, phone, connectors) and *per-course* (syllabus, site, materials). Connect Canvas token / iCal → drop syllabi (many at once) → **upload weekly class schedule** (image or file; approve the parse in a simple weekly view — these become hard planning boundaries) → optional course URLs → **review pending changes** (bulk approve, fix inline) → briefing → phone capture → "we'll text you tomorrow morning" (first message fires). Payoff must be immediate and visceral. Mid-semester variant: same flow + "mark everything before today done?"
 3. **Dashboard** — relevance-ordered, not a fixed widget grid: what's happening (today's plan), what's upcoming, the **change feed** (auto-applied "new from Canvas" + the few pending approvals chat couldn't confirm in-flow — this must never become a chore inbox; see core.md "Approval channels"), recent artifacts (M3), quick links. Ordering informed by recent chat context. Real-time via Convex.
 4. **Semester** — calendar-shaped: deadlines + planned tasks, filter by course, zoom week/month/semester, diffs highlighted (moved / added / pending). Click → facts, provenance, fix. No drag-to-plan.
 5. **Course workspace (shell only in M1)** — course-scoped view: grading scheme, upcoming, materials, artifacts. The viewport/rail shell is in place; the workspace agent and artifact chat arrive in M3 when there are artifacts to talk about. Don't ship a chat rail with nothing to chat about.
@@ -51,6 +51,10 @@ Every page renders in the viewport with a rail: Dashboard/Semester get Context/T
 
 - Editor for student-authored notes in the workspace — only if M3 usage shows students want to write here, not just read and ask.
 - Notion/Docs imports; personal calendar connector UI (M2).
+
+## Design flow
+
+Before a UI slice is built, its screens are laid out in **Paper** (MCP `paper`) with dummy data for 2–3 scenarios (normal week, hell week with pending conflicts, mid-semester), reviewed by the founder there, then built. Agentation for what's wrong in the running app; DialKit for how much; Paper for what it should be before it exists.
 
 ## Design rules
 
