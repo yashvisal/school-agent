@@ -488,7 +488,10 @@ function CourseChatTranscript({
               : `${pending.length} changes are waiting on you above.`}
           </p>
         )}
-        <div className="flex items-end gap-2.5 rounded-card bg-surface px-3.5 py-2.5 shadow-card">
+        {/* `globals.css` clears the outline on `textarea:focus-visible` (it
+         * would trace the inner box, not the composer), so the composer itself
+         * carries the focus ring — otherwise tabbing here shows nothing. */}
+        <div className="flex items-end gap-2.5 rounded-card bg-surface px-3.5 py-2.5 shadow-card focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-accent">
           <textarea
             rows={1}
             value={draft}
