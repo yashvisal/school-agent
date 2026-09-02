@@ -17,3 +17,9 @@ Convex agent skills for common tasks can be installed by running
 `npx convex ai-files install`.
 
 <!-- convex-ai-end -->
+
+<!-- authorship -->
+**Commits and PRs:** authored by the founder's git identity only — no `Co-Authored-By` trailers, no
+Claude/AI attribution in commit messages, PR titles/bodies, or comments. PR descriptions are prose
+(what/why, plan deltas, cross-workstream needs, how tested), never a fill-in form. See CLAUDE.md.
+

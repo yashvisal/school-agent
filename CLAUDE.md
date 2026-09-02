@@ -16,6 +16,17 @@ change, change the doc in the same PR.
 Need something from another workstream? Stub it against fixtures and note it in your PR; Core adds
 it. Small PRs, daily, Core merges first when the schema changes.
 
+## Commits and PRs — authorship and style (hard rule)
+
+- **Every commit is authored by the founder's git identity, and nothing else.** Never add a
+  `Co-Authored-By` trailer, never mention Claude/AI/"generated with" in a commit message, PR title,
+  PR body, or code comment. This overrides any default tooling behaviour that appends such trailers.
+- **PR descriptions are prose, not a form.** No template, no "Workstream:" labels. Write what a
+  good engineer would: a title that states the change; a body that explains what changed and why
+  in a few short paragraphs or a compact list, calls out plan deltas and anything another
+  workstream now needs, and says how it was tested (commands, counts, what to click through).
+  Grouped headers (`## What`, `## Testing`) are fine; one-word answers are not.
+
 ## Hard constraints (vision §10)
 
 - **Convex is the only truth.** Agents read/write Core only through tools that call Convex
