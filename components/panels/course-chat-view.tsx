@@ -77,11 +77,31 @@ export function CourseChatView({
     ? openTabIds
     : [...openTabIds, chatId]
 
+  /* Closing a tab removes the button the keyboard was standing on. Without
+   * this, focus falls back to `<body>` and the person is dumped out of the
+   * strip — worst for an *inactive* tab, where nothing navigates to cover it.
+   * Park the id to focus, then focus it once React has rendered the new set. */
+  const tabLinks = React.useRef(new Map<string, HTMLAnchorElement | null>())
+  const focusAfterClose = React.useRef<string | null>(null)
+
+  React.useEffect(() => {
+    const id = focusAfterClose.current
+    if (id === null) return
+    focusAfterClose.current = null
+    tabLinks.current.get(id)?.focus()
+  })
+
   function close(id: string) {
     const next = closeTab(id)
-    if (id !== chatId) return
+    if (id !== chatId) {
+      /* no navigation happens, so the focus move is entirely ours to make */
+      focusAfterClose.current = next
+      return
+    }
     /* closing the active tab focuses its neighbour; closing the last one puts
-     * you back on Overview rather than on an empty pane */
+     * you back on Overview rather than on an empty pane, where the router
+     * moves focus to that page's `<h1>` */
+    if (next) focusAfterClose.current = next
     router.push(next ? `${base}/chats/${next}` : base)
   }
 
@@ -144,6 +164,9 @@ export function CourseChatView({
                   }}
                 >
                   <Link
+                    ref={(node) => {
+                      tabLinks.current.set(id, node)
+                    }}
                     href={`${base}/chats/${id}`}
                     aria-current={active ? "page" : undefined}
                     title={title}

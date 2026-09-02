@@ -19,9 +19,19 @@ export function ViewportHeader({
 }) {
   return (
     <div className="flex h-11 shrink-0 items-center gap-3 border-b border-line px-4">
-      <span className="text-[13.5px] font-semibold text-ink">{title}</span>
+      {/* the page's heading, and the thing focus lands on after a route change
+       * (`tabIndex={-1}` makes it programmatically focusable without putting
+       * it in the tab order) */}
+      <h1
+        tabIndex={-1}
+        className="text-[13.5px] font-semibold text-ink outline-none"
+      >
+        {title}
+      </h1>
       {meta && <span className="text-[12.5px] text-ink-3">{meta}</span>}
-      {actions && <span className="ml-auto flex items-center gap-1.5">{actions}</span>}
+      {actions && (
+        <span className="ml-auto flex items-center gap-1.5">{actions}</span>
+      )}
     </div>
   )
 }
@@ -57,12 +67,14 @@ export function SectionHeader({
     <div className="flex items-center gap-2 px-0.5">
       <span className="text-[13px] font-semibold text-ink">{title}</span>
       {count !== undefined && (
-        <span className="inline-flex h-5 items-center rounded-md bg-inset px-1.5 text-[11.5px] font-medium tabular-nums text-ink-2 shadow-hairline">
+        <span className="inline-flex h-5 items-center rounded-md bg-inset px-1.5 text-[11.5px] font-medium text-ink-2 tabular-nums shadow-hairline">
           {count}
         </span>
       )}
       {hint && <span className="text-[12px] text-ink-3">{hint}</span>}
-      {actions && <span className="ml-auto flex items-center gap-1.5">{actions}</span>}
+      {actions && (
+        <span className="ml-auto flex items-center gap-1.5">{actions}</span>
+      )}
     </div>
   )
 }
@@ -81,7 +93,11 @@ export function EmptyState({
   return (
     <div className="rounded-card bg-surface px-3.5 py-3 shadow-card">
       <p className="text-[13px] text-ink">{line}</p>
-      {detail && <p className="mt-1 text-[12.5px] leading-relaxed text-ink-2">{detail}</p>}
+      {detail && (
+        <p className="mt-1 text-[12.5px] leading-relaxed text-ink-2">
+          {detail}
+        </p>
+      )}
     </div>
   )
 }
