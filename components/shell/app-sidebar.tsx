@@ -358,30 +358,33 @@ function GlobalNav({ dials }: { dials: Dials }) {
 /* ── course mode ────────────────────────────────────────────────────────── */
 
 /**
- * The course identity *is* the back affordance: the chevron takes the exact
- * slot the workspace glyph occupies, and the course code takes the slot the
- * product name occupies. The row is structurally identical in both modes —
- * icon slot + label — so global ↔ course changes the *meaning* of the header
- * without moving it. Clicking anywhere on it leaves the course. No separate
- * "← All courses" row and no separate course-title row: the header is both.
+ * The course identity row. Geometry is byte-for-byte the global workspace row —
+ * same absolute box, same 20px icon slot, same label offset — so global ↔
+ * course swaps *in place* and only the meaning of the two slots changes.
+ *
+ * The back affordance is the **chevron only**: its hit area and hover state are
+ * exactly the 20px slot the "s" glyph occupies in global mode. The course code
+ * beside it is a plain label — a whole row that lights up on hover reads like a
+ * course switcher, which is not what it does.
  */
 function CourseHeader({ courseId }: { courseId: string }) {
   const courses = useCourses()
   const course = courses?.find((c) => c._id === courseId)
 
   return (
-    <Link
-      href="/"
-      title="All courses"
-      className="sidebar-workspace-control absolute top-1 left-2 flex h-8 w-[164px] items-center rounded-[8px] px-2 transition-[background-color] duration-150 hover:bg-hover-2"
-    >
-      <span className="sidebar-logo flex size-5 shrink-0 items-center justify-center text-ink-2">
+    <div className="sidebar-workspace-control absolute top-1 left-2 flex h-8 w-[164px] items-center rounded-[8px] px-2">
+      <Link
+        href="/"
+        aria-label="All courses"
+        title="All courses"
+        className="sidebar-logo flex size-5 shrink-0 items-center justify-center rounded-[6px] text-ink-2 transition-colors duration-150 hover:bg-hover-2 hover:text-ink"
+      >
         <ChevronLeft size={18} />
-      </span>
+      </Link>
       <span className="sidebar-copy ml-1.5 min-w-0 flex-1 truncate text-[14px] font-semibold text-ink">
         {course?.code ?? "Course"}
       </span>
-    </Link>
+    </div>
   )
 }
 
