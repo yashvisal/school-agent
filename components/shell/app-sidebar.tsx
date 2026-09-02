@@ -4,7 +4,6 @@ import * as React from "react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { UserButton } from "@clerk/nextjs"
-import { useDialKit } from "dialkit"
 import {
   CalendarDays,
   ChevronLeft,
@@ -41,9 +40,40 @@ import { useCourseChats, useCourses } from "@/lib/data/hooks"
  * centred in both states (the `sidebar-*` CSS lives in `app/globals.css`).
  */
 
+/* Row geometry, in px. Every row — header, nav, course, chat — and both
+ * sidebar toggles read these, so a change here moves the whole column at
+ * once and nothing can drift a pixel from its neighbours. */
+const SIDEBAR_ROWS = {
+  /** height of every row, header included */
+  rowHeight: 32,
+  /** gap between rows inside one group */
+  rowGap: 1,
+  /** breathing room around a group divider */
+  sectionGap: 10,
+  /** the 8px between the column edge and a row, and the 8px a row pads
+   * inside itself — identical on both sides and in both states */
+  inset: 8,
+  /** the 20px icon slot at the head of every row */
+  iconSlot: 20,
+}
+
+/* Collapsed, a row is just its padding and its icon slot, so the rail is
+ * that plus the column inset on each side: 8 + 8 + 20 + 8 + 8 = 52. The icon
+ * therefore sits at the same x in both states and never slides when the
+ * labels go — collapsing only removes what is to the right of it. */
+const SIDEBAR_COLLAPSED_ROW = SIDEBAR_ROWS.inset * 2 + SIDEBAR_ROWS.iconSlot
+const SIDEBAR_COLLAPSED_WIDTH = SIDEBAR_COLLAPSED_ROW + SIDEBAR_ROWS.inset * 2
+
+const SIDEBAR_EXPANDED_WIDTH = 224
+
+/* The header is one row wide minus the collapse toggle beside it: the toggle
+ * shares the row's height and right inset, and a 2px seam keeps the two
+ * hover boxes readable as two controls. 224 - 8 - 28 - 2 - 8 = 178. */
+const SIDEBAR_TOGGLE_WIDTH = 28
+const SIDEBAR_HEADER_WIDTH =
+  SIDEBAR_EXPANDED_WIDTH - SIDEBAR_ROWS.inset * 2 - SIDEBAR_TOGGLE_WIDTH - 2
+
 const SIDEBAR_MOTION = {
-  expandedWidth: 224,
-  collapsedWidth: 52,
   duration: 280,
   copyDuration: 180,
   copyOffset: 8,
@@ -178,7 +208,7 @@ function SectionLabel({
   action?: React.ReactNode
 }) {
   return (
-    <div className="sidebar-copy mx-2 flex h-6 shrink-0 items-center px-2">
+    <div className="sidebar-collapse-hide sidebar-copy mx-2 flex h-6 shrink-0 items-center px-2">
       <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium tracking-[0.04em] text-ink-3">
         {label}
       </span>
@@ -195,22 +225,6 @@ export function AppSidebar({ className = "" }: { className?: string }) {
    * desync. */
   const courseId = /^\/courses\/([^/]+)/.exec(pathname)?.[1]
 
-  const dials = useDialKit(
-    "Sidebar",
-    {
-      /** height of every nav / course / chat row */
-      rowHeight: [32, 26, 44] as [number, number, number],
-      /** gap between rows inside one group */
-      rowGap: [1, 0, 10] as [number, number, number],
-      /** breathing room around a group divider */
-      sectionGap: [10, 2, 28] as [number, number, number],
-    },
-    /* Persist only in dev: DialKit hides its panel in production but still
-     * reads its localStorage entry, so a tuned value would silently override
-     * the shipped defaults. */
-    { id: "sidebar", persist: process.env.NODE_ENV !== "production" }
-  )
-
   return (
     <aside
       data-sidebar-collapsed={collapsed}
@@ -218,25 +232,37 @@ export function AppSidebar({ className = "" }: { className?: string }) {
       className={`relative flex h-full shrink-0 overflow-hidden transition-[width] ${className}`}
       style={
         {
-          width: collapsed
-            ? SIDEBAR_MOTION.collapsedWidth
-            : SIDEBAR_MOTION.expandedWidth,
+          width: collapsed ? SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_EXPANDED_WIDTH,
           transitionDuration: `${SIDEBAR_MOTION.duration}ms`,
           transitionTimingFunction: SIDEBAR_MOTION.easing,
           "--sidebar-copy-duration": `${SIDEBAR_MOTION.copyDuration}ms`,
           "--sidebar-copy-offset": `${SIDEBAR_MOTION.copyOffset}px`,
           "--sidebar-easing": SIDEBAR_MOTION.easing,
+          /* what every row, rule and the footer shrink to when collapsed */
+          "--sidebar-collapsed-row": `${SIDEBAR_COLLAPSED_ROW}px`,
         } as React.CSSProperties
       }
     >
-      <div className="flex min-h-0 w-[224px] shrink-0 flex-col">
+      <div
+        className="flex min-h-0 shrink-0 flex-col pb-2.5"
+        style={{ width: SIDEBAR_EXPANDED_WIDTH }}
+      >
         {/* header: the workspace, or — in course mode — the course and the way
          * back out. One row, one slot, two meanings. */}
-        <div className="relative mb-2.5 h-10 shrink-0">
+        <div
+          className="relative mb-2.5 shrink-0"
+          style={{ height: SIDEBAR_ROWS.rowHeight + 8 }}
+        >
           {courseId ? (
-            <CourseHeader courseId={courseId} />
+            <CourseHeader courseId={courseId} height={SIDEBAR_ROWS.rowHeight} />
           ) : (
-            <div className="sidebar-workspace-control absolute top-1 left-2 flex h-8 w-[164px] items-center rounded-[8px] px-2">
+            <div
+              className="sidebar-workspace-control absolute top-1 left-2 flex items-center rounded-[8px] px-2"
+              style={{
+                width: SIDEBAR_HEADER_WIDTH,
+                height: SIDEBAR_ROWS.rowHeight,
+              }}
+            >
               <span className="sidebar-logo flex size-5 shrink-0 items-center justify-center">
                 <span className="flex size-5 items-center justify-center rounded-[6px] bg-ink text-[10px] font-semibold text-surface">
                   s
@@ -254,7 +280,13 @@ export function AppSidebar({ className = "" }: { className?: string }) {
             aria-hidden={collapsed}
             tabIndex={collapsed ? -1 : 0}
             onClick={() => setCollapsed(true)}
-            className="sidebar-collapse-control absolute top-1 right-2 flex size-8 items-center justify-center rounded-[8px] text-ink-3 transition-[opacity,background-color,color] duration-150 hover:bg-hover-2 hover:text-ink"
+            /* The same height as the header row beside it and the nav rows
+             * beneath, so the two hover boxes read as one bar with a seam. */
+            style={{
+              width: SIDEBAR_TOGGLE_WIDTH,
+              height: SIDEBAR_ROWS.rowHeight,
+            }}
+            className="sidebar-collapse-control absolute top-1 right-2 flex items-center justify-center rounded-[8px] text-ink-3 transition-[opacity,background-color,color] duration-150 hover:bg-hover-2 hover:text-ink"
           >
             <PanelLeft size={18} />
           </button>
@@ -264,20 +296,26 @@ export function AppSidebar({ className = "" }: { className?: string }) {
             aria-hidden={!collapsed}
             tabIndex={collapsed ? 0 : -1}
             onClick={() => setCollapsed(false)}
-            className="sidebar-expand-control absolute top-0.5 left-2 flex size-9 items-center justify-center rounded-[8px] text-ink-3 transition-[opacity,background-color,color] duration-150 hover:bg-hover-2 hover:text-ink"
+            /* Collapsed, this reads as the first row of the icon column: the
+             * same box the nav rows collapse to, same inset, same 18px glyph —
+             * so it lines up with Overview/Library beneath it. */
+            style={{
+              left: SIDEBAR_ROWS.inset,
+              width: SIDEBAR_COLLAPSED_ROW,
+              height: SIDEBAR_ROWS.rowHeight,
+            }}
+            className="sidebar-expand-control absolute top-1 flex items-center justify-center rounded-[8px] text-ink-3 transition-[opacity,background-color,color] duration-150 hover:bg-hover-2 hover:text-ink"
           >
             <PanelLeft size={18} className="rotate-180" />
           </button>
         </div>
 
-        {courseId ? (
-          <CourseNav courseId={courseId} dials={dials} />
-        ) : (
-          <GlobalNav dials={dials} />
-        )}
+        {courseId ? <CourseNav courseId={courseId} /> : <GlobalNav />}
 
-        {/* footer: account + theme — the same in both modes */}
-        <div className="mx-2 mt-3 flex h-9 w-[208px] shrink-0 items-center gap-2 border-t border-line pt-3">
+        {/* footer: account + theme — the same in both modes.
+         * No fixed height: `h-9` left a 23px content box for a 28px avatar,
+         * which overflowed the column and was sliced by the aside's clip. */}
+        <div className="sidebar-footer mx-2 mt-3 flex shrink-0 items-center gap-2 border-t border-line px-1 pt-3">
           <span className="flex size-7 shrink-0 items-center justify-center">
             <UserButton />
           </span>
@@ -290,28 +328,28 @@ export function AppSidebar({ className = "" }: { className?: string }) {
   )
 }
 
-type Dials = { rowHeight: number; rowGap: number; sectionGap: number }
-
 /* ── global mode ────────────────────────────────────────────────────────── */
 
-function GlobalNav({ dials }: { dials: Dials }) {
+function GlobalNav() {
   const pathname = usePathname()
   const courses = useCourses()
 
   return (
     <>
-      <GlideGroup gap={dials.rowGap}>
+      <GlideGroup gap={SIDEBAR_ROWS.rowGap}>
         {PRIMARY.map((item) => {
           const Icon = item.icon
           const active =
-            item.href === "/" ? pathname === "/" : pathname.startsWith(item.href)
+            item.href === "/"
+              ? pathname === "/"
+              : pathname.startsWith(item.href)
           return (
             <RailLink
               key={item.href}
               href={item.href}
               label={item.label}
               active={active}
-              height={dials.rowHeight}
+              height={SIDEBAR_ROWS.rowHeight}
               icon={<Icon size={18} />}
             />
           )
@@ -319,8 +357,8 @@ function GlobalNav({ dials }: { dials: Dials }) {
       </GlideGroup>
 
       <div
-        className="sidebar-copy mx-2 h-px shrink-0 bg-line"
-        style={{ marginBlock: dials.sectionGap }}
+        className="sidebar-rule mx-2 h-px shrink-0 bg-line"
+        style={{ marginBlock: SIDEBAR_ROWS.sectionGap }}
       />
 
       <SectionLabel label="COURSES" />
@@ -328,9 +366,9 @@ function GlobalNav({ dials }: { dials: Dials }) {
       {/* one entry per course — clicking one *enters* it (course mode) */}
       <div
         className="min-h-0 flex-1 overflow-y-auto"
-        style={{ paddingTop: dials.rowGap }}
+        style={{ paddingTop: SIDEBAR_ROWS.rowGap }}
       >
-        <GlideGroup gap={dials.rowGap}>
+        <GlideGroup gap={SIDEBAR_ROWS.rowGap}>
           {courses?.map((course) => (
             <RailLink
               key={course._id}
@@ -338,7 +376,7 @@ function GlobalNav({ dials }: { dials: Dials }) {
               label={course.code}
               monogram={course.code.slice(0, 1)}
               accent={course.accent}
-              height={dials.rowHeight}
+              height={SIDEBAR_ROWS.rowHeight}
               active={pathname.startsWith(`/courses/${course._id}`)}
             />
           ))}
@@ -362,33 +400,40 @@ function GlobalNav({ dials }: { dials: Dials }) {
  * same absolute box, same 20px icon slot, same label offset — so global ↔
  * course swaps *in place* and only the meaning of the two slots changes.
  *
- * The back affordance is the **chevron only**: its hit area and hover state are
- * exactly the 20px slot the "s" glyph occupies in global mode. The course code
- * beside it is a plain label — a whole row that lights up on hover reads like a
- * course switcher, which is not what it does.
+ * The whole row is the back link and hovers like every other sidebar row
+ * (Overview, Library, the course list): it *is* a nav row — "back to all
+ * courses". A chevron-only halo was tried and can't work: a hover box needs
+ * ~5px of air, the glyph lives in a 20px slot, and the label starts 6px to
+ * its right, so the halo either hugs the icon or crowds the text.
  */
-function CourseHeader({ courseId }: { courseId: string }) {
+function CourseHeader({
+  courseId,
+  height,
+}: {
+  courseId: string
+  height: number
+}) {
   const courses = useCourses()
   const course = courses?.find((c) => c._id === courseId)
 
   return (
-    <div className="sidebar-workspace-control absolute top-1 left-2 flex h-8 w-[164px] items-center rounded-[8px] px-2">
-      <Link
-        href="/"
-        aria-label="All courses"
-        title="All courses"
-        className="sidebar-logo flex size-5 shrink-0 items-center justify-center rounded-[6px] text-ink-2 transition-colors duration-150 hover:bg-hover-2 hover:text-ink"
-      >
+    <Link
+      href="/"
+      title="All courses"
+      className="sidebar-workspace-control absolute top-1 left-2 flex items-center rounded-[8px] px-2 transition-[background-color] duration-150 hover:bg-hover-2"
+      style={{ width: SIDEBAR_HEADER_WIDTH, height }}
+    >
+      <span className="sidebar-logo flex size-5 shrink-0 items-center justify-center text-ink-2">
         <ChevronLeft size={18} />
-      </Link>
-      <span className="sidebar-copy ml-1.5 min-w-0 flex-1 truncate text-[14px] font-semibold text-ink">
+      </span>
+      <span className="sidebar-copy ml-1.5 min-w-0 flex-1 truncate text-[14px] font-medium text-ink">
         {course?.code ?? "Course"}
       </span>
-    </div>
+    </Link>
   )
 }
 
-function CourseNav({ courseId, dials }: { courseId: string; dials: Dials }) {
+function CourseNav({ courseId }: { courseId: string }) {
   const pathname = usePathname()
   const router = useRouter()
   const chats = useCourseChats(courseId)
@@ -397,26 +442,26 @@ function CourseNav({ courseId, dials }: { courseId: string; dials: Dials }) {
 
   return (
     <>
-      <GlideGroup gap={dials.rowGap}>
+      <GlideGroup gap={SIDEBAR_ROWS.rowGap}>
         <RailLink
           href={base}
           label="Overview"
           active={pathname === base}
-          height={dials.rowHeight}
+          height={SIDEBAR_ROWS.rowHeight}
           icon={<SquareChartGantt size={18} />}
         />
         <RailLink
           href={`${base}/library`}
           label="Library"
           active={pathname.startsWith(`${base}/library`)}
-          height={dials.rowHeight}
+          height={SIDEBAR_ROWS.rowHeight}
           icon={<FolderOpen size={18} />}
         />
       </GlideGroup>
 
       <div
-        className="sidebar-copy mx-2 h-px shrink-0 bg-line"
-        style={{ marginBlock: dials.sectionGap }}
+        className="sidebar-rule mx-2 h-px shrink-0 bg-line"
+        style={{ marginBlock: SIDEBAR_ROWS.sectionGap }}
       />
 
       <SectionLabel
@@ -434,26 +479,30 @@ function CourseNav({ courseId, dials }: { courseId: string; dials: Dials }) {
         }
       />
 
+      {/* the scroller stays (it is the flex-1 that holds the footer down);
+       * only its contents go, since a chat row is a title and no glyph */}
       <div
         className="min-h-0 flex-1 overflow-y-auto"
-        style={{ paddingTop: dials.rowGap }}
+        style={{ paddingTop: SIDEBAR_ROWS.rowGap }}
       >
-        <GlideGroup gap={dials.rowGap}>
-          {chats?.map((chat) => (
-            <ChatLink
-              key={chat._id}
-              href={`${base}/chats/${chat._id}`}
-              title={chat.title}
-              height={dials.rowHeight}
-              active={pathname === `${base}/chats/${chat._id}`}
-            />
-          ))}
-        </GlideGroup>
-        {chats?.length === 0 && (
-          <p className="sidebar-copy mx-2 px-2 py-1 text-[12px] leading-relaxed text-ink-3">
-            No chats in this course yet.
-          </p>
-        )}
+        <div className="sidebar-collapse-hide">
+          <GlideGroup gap={SIDEBAR_ROWS.rowGap}>
+            {chats?.map((chat) => (
+              <ChatLink
+                key={chat._id}
+                href={`${base}/chats/${chat._id}`}
+                title={chat.title}
+                height={SIDEBAR_ROWS.rowHeight}
+                active={pathname === `${base}/chats/${chat._id}`}
+              />
+            ))}
+          </GlideGroup>
+          {chats?.length === 0 && (
+            <p className="sidebar-copy mx-2 px-2 py-1 text-[12px] leading-relaxed text-ink-3">
+              No chats in this course yet.
+            </p>
+          )}
+        </div>
       </div>
     </>
   )

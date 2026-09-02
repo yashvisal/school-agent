@@ -533,7 +533,13 @@ a:focus-visible .animated-underline::after {
 
 /* ══════════════════════════════════════════════════════════
  * COMPONENT-SPECIFIC — SidebarNav
- * The 52↔224px collapsible sidebar tree.
+ * The collapsible sidebar tree: 224px expanded, 52px collapsed — the same
+ * 8px column inset and 8px row padding on both sides, around one 20px icon
+ * slot, so a glyph is at the same x in both states and only the labels go.
+ *
+ * The numbers live in `SIDEBAR_ROWS` in app-sidebar.tsx; the aside hands the
+ * collapsed row width down as `--sidebar-collapsed-row` so the rules here
+ * never restate it.
  * Copy this block only alongside SidebarNav; it is not part of the
  * generic foundation above.
  * ══════════════════════════════════════════════════════════ */
@@ -568,14 +574,39 @@ a:focus-visible .animated-underline::after {
   left: 8px;
 }
 
-[data-sidebar-collapsed="true"] .sidebar-row {
-  width: 36px;
+/* A group rule. Unlike `.sidebar-copy` it survives the collapse — with the
+ * labels gone it is the only thing left separating nav from courses. */
+.sidebar-rule {
+  width: 208px;
+  transition: width var(--sidebar-copy-duration) var(--sidebar-easing);
+}
+
+/* The footer tracks the row width so the avatar lands on the icon column. */
+.sidebar-footer {
+  width: 208px;
+  transition: width var(--sidebar-copy-duration) var(--sidebar-easing);
+}
+
+/* ── collapsed ──────────────────────────────────────────── */
+
+[data-sidebar-collapsed="true"] .sidebar-row,
+[data-sidebar-collapsed="true"] .sidebar-rule,
+[data-sidebar-collapsed="true"] .sidebar-footer {
+  width: var(--sidebar-collapsed-row);
 }
 
 [data-sidebar-collapsed="true"] .sidebar-copy {
   pointer-events: none;
   opacity: 0;
   transform: translateX(calc(var(--sidebar-copy-offset) * -1));
+}
+
+/* Section labels and the chat list have nothing to show at one icon wide — a
+ * chat row is a title and no glyph, so collapsed it would be a ghost row with
+ * a hover highlight and no content. Take them out of the flow entirely rather
+ * than leave invisible gaps in the rhythm. */
+[data-sidebar-collapsed="true"] .sidebar-collapse-hide {
+  display: none;
 }
 
 [data-sidebar-collapsed="true"] .sidebar-workspace-control {
@@ -595,7 +626,7 @@ a:focus-visible .animated-underline::after {
 
 [data-sidebar-collapsed="true"] .sidebar-glide-highlight {
   right: auto;
-  width: 36px;
+  width: var(--sidebar-collapsed-row);
 }
 
 @media (prefers-reduced-motion: reduce) {
