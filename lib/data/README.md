@@ -3,7 +3,11 @@
 `hooks.ts` is the **only** place the UI touches data. Every hook is now a **real Convex
 subscription** (`undefined` while loading, then data) plus an adapter that maps Core's docs onto
 the Face view-model in `types.ts`. Panels never see a Convex doc and never import `fixtures.ts`
-(kept only as shape reference / future story data).
+directly.
+
+One exception, marked as such: `useCourseChats` / `useCourseChat` read `fixtures.ts` because Core
+has **no `chats` table yet**. They keep the other hooks' contract and return the shape Core will
+return, so swapping them for a subscription is a one-line change here and nothing in the UI moves.
 
 `types.ts` is **not** deleted now that the schema exists — it is the view-model, and several of
 its fields are presentation Core deliberately does not store (vision §9): `accent`,
