@@ -4,7 +4,6 @@ import * as React from "react"
 import { usePathname } from "next/navigation"
 
 import { EmptyState, LoadingRows } from "@/components/panels/chrome"
-import { ChatRail } from "@/components/workspace/chat-rail"
 import { agoLabel, dueLabel, minutesLabel, timeLabel } from "@/lib/format"
 import {
   useCourses,
@@ -19,14 +18,17 @@ import {
  *
  *  - **Context** — the sources behind what you're looking at, with provenance.
  *  - **Tasks** — this course's plan, read-only, from Core.
- *  - **Chat** — artifact-scoped, course workspaces only (Milestone 3).
+ *
+ * There is no Chat slot: in course mode the conversation is the **viewport**
+ * (vision §8 "Course mode"), so a rail tab for it would be a second place to
+ * have the same conversation.
  *
  * Which slots exist is decided by the route rather than by a parallel route,
  * so pages stay plain components; `AppShell` renders this beside `children`.
  * Hidden below `lg`.
  */
 
-type Slot = "Context" | "Tasks" | "Chat"
+type Slot = "Context" | "Tasks"
 
 function RailHeader({
   slots,
@@ -216,25 +218,21 @@ export function AppRail() {
   const courseMatch = /^\/courses\/([^/]+)/.exec(pathname)
   const courseId = courseMatch?.[1]
 
-  const slots: Slot[] = courseId
-    ? ["Chat", "Context", "Tasks"]
-    : ["Context", "Tasks"]
+  const slots: Slot[] = ["Context", "Tasks"]
 
-  const [active, setActive] = React.useState<Slot>(slots[0])
-  /* the rail flips role with the viewport: reset the slot when the route
+  const [active, setActive] = React.useState<Slot>("Context")
+  /* the rail flips role with the viewport: reset the slot when the course
    * changes (adjusted during render, not from an effect) */
   const [slotFor, setSlotFor] = React.useState(courseId)
   if (slotFor !== courseId) {
     setSlotFor(courseId)
-    setActive(courseId ? "Chat" : "Context")
+    setActive("Context")
   }
 
   return (
     <>
       <RailHeader slots={slots} active={active} onSelect={setActive} />
-      {active === "Chat" && courseId ? (
-        <ChatRail courseId={courseId} />
-      ) : active === "Tasks" ? (
+      {active === "Tasks" ? (
         <TasksPanel courseId={courseId} />
       ) : (
         <ContextPanel courseId={courseId} />

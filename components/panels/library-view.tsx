@@ -7,60 +7,108 @@ import {
   ViewportBody,
   ViewportHeader,
 } from "@/components/panels/chrome"
-import { useCourses, useSources } from "@/lib/data/hooks"
+import { useCourse, useSources } from "@/lib/data/hooks"
 
 /**
- * Library — a stub until Milestone 3. It is the Drive-like home for agent
- * artifacts plus everything the student brings in, foldered by course
- * (face.md M3). Empty state states what is true, not what to do.
+ * The course Library — **per course only**; there is no global Library tab
+ * (vision §8). Drive-like: this course's files (uploads, Canvas captures) and,
+ * from Milestone 3, the agent's artifacts and lessons.
+ *
+ * **Placeholder.** Core stores no files yet — nothing on this page is a real
+ * listing, and it says so rather than showing an empty table that looks
+ * broken. The counts it *does* state are true (they come from `sources`).
  */
-export function LibraryView() {
-  const courses = useCourses()
+export function CourseLibraryView({ courseId }: { courseId: string }) {
+  const course = useCourse(courseId)
   const sources = useSources()
 
-  /* Count syllabi only from the syllabus source — courses are a different
-   * entity and would state a number that isn't about files at all. */
-  const syllabusCount = sources?.find((s) => s.kind === "syllabus")?.covers.length ?? 0
+  /* Count syllabus *sources* that cover this course. Reading `covers.length`
+   * off the first syllabus source counted courses, not files, and reported the
+   * same number in every course's Library. */
+  const syllabusCount =
+    course && sources
+      ? sources.filter(
+          (s) => s.kind === "syllabus" && s.covers.includes(course.code)
+        ).length
+      : 0
+
+  if (course === null) {
+    return (
+      <>
+        <ViewportHeader title="Library" />
+        <ViewportBody>
+          <EmptyState
+            line="No course with that id."
+            detail="Courses come from Canvas and your syllabi — if one is missing, its source is probably failing. Check Connectors."
+          />
+        </ViewportBody>
+      </>
+    )
+  }
 
   return (
     <>
-      <ViewportHeader title="Library" meta="Milestone 3" />
+      <ViewportHeader
+        title={course ? `${course.name} — Library` : "Library"}
+        meta={course ? `${course.code} · Milestone 3` : "Milestone 3"}
+      />
       <ViewportBody>
         <section className="flex flex-col gap-3">
-          <SectionHeader title="Nothing here yet" />
-          {sources === undefined ? (
+          <SectionHeader title="Nothing filed here yet" />
+          {sources === undefined || course === undefined ? (
             <LoadingRows rows={1} />
           ) : (
             <EmptyState
               line={
-                syllabusCount === 1
-                  ? "1 syllabus is already in the system — it became deadlines and a grading scheme, not a file."
-                  : `${syllabusCount} syllabi are already in the system — they became deadlines and grading schemes, not files.`
+                syllabusCount === 0
+                  ? `Nothing has been filed for ${course.code} yet.`
+                  : syllabusCount === 1
+                    ? "1 syllabus is already in the system — it became deadlines and a grading scheme, not a file."
+                    : `${syllabusCount} syllabi are already in the system — they became deadlines and grading schemes, not files.`
               }
-              detail="The Library fills up when the workspace agent starts building things: a primer before a quiz, a review outline for a pset, notes from a lesson. Course materials the agent pulls from Canvas land here too. Until there's an artifact worth keeping, there's nothing to file."
+              detail="This course's Library fills up when the workspace agent starts building things: a primer before a quiz, a review outline for a pset, notes from a lesson. Canvas files for the course land here too. Until there's an artifact worth keeping, there's nothing to file."
             />
           )}
         </section>
 
         <section className="flex flex-col gap-3">
-          <SectionHeader title="Courses it will be foldered by" count={courses?.length} />
+          <SectionHeader
+            title="What will live here"
+            hint="not a listing — Core stores no files yet"
+          />
           <div className="grid gap-2 sm:grid-cols-2">
-            {courses?.map((course) => (
+            {[
+              {
+                label: "Prepared for you",
+                detail:
+                  "primers, review outlines and lessons the workspace agent builds for a planned task",
+              },
+              {
+                label: "From Canvas",
+                detail:
+                  "slides, handouts and readings captured from this course's files and pages",
+              },
+              {
+                label: "Yours",
+                detail:
+                  "anything you upload or text in — notes, photos of the board, a PDF a friend sent",
+              },
+              {
+                label: "Notes",
+                detail:
+                  "what a lesson leaves behind when you finish it (Milestone 3)",
+              },
+            ].map((row) => (
               <div
-                key={course._id}
-                className="flex items-center gap-2.5 rounded-card bg-surface px-3 py-2.5 shadow-card"
+                key={row.label}
+                className="flex flex-col gap-1 rounded-card bg-surface px-3.5 py-3 shadow-card"
               >
-                <span
-                  aria-hidden
-                  className="flex size-5 shrink-0 items-center justify-center rounded-[6px] text-[10px] font-semibold text-white"
-                  style={{ background: course.accent }}
-                >
-                  {course.code.slice(0, 1)}
+                <span className="text-[13px] font-medium text-ink">
+                  {row.label}
                 </span>
-                <span className="min-w-0 flex-1 truncate text-[13px] text-ink">
-                  {course.name}
+                <span className="text-[12px] leading-relaxed text-ink-2">
+                  {row.detail}
                 </span>
-                <span className="shrink-0 text-[11.5px] text-ink-3">0 items</span>
               </div>
             ))}
           </div>

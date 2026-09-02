@@ -19,7 +19,9 @@ import {
 } from "@/lib/eve/reduce"
 
 /**
- * Artifact-scoped chat for a course workspace — Spike B #2.
+ * The course chat transcript — Spike B #2, now in the **viewport** rather than
+ * the rail (vision §8 "Course mode": opening a chat puts the conversation in
+ * the main pane; the rail carries Context and Tasks).
  *
  * The stream comes from `useEveAgent({ agent: "workspace" })` (eve's NDJSON
  * events, *not* the AI SDK `useChat` protocol), and `lib/eve/reduce.ts` maps
@@ -44,7 +46,7 @@ function UserRow({ text, failed }: { text: string; failed: boolean }) {
   return (
     <div className="flex justify-end">
       <p
-        className={`max-w-[85%] rounded-card px-3 py-2 text-[12.5px] leading-relaxed ${
+        className={`max-w-[85%] rounded-card px-3.5 py-2.5 text-[13px] leading-relaxed ${
           failed ? "bg-red-tint text-red" : "bg-inset text-ink"
         }`}
       >
@@ -71,7 +73,7 @@ function ThinkingRow({ text, streaming }: { text: string; streaming: boolean }) 
 
 function TextRow({ text, streaming }: { text: string; streaming: boolean }) {
   return (
-    <p className="px-0.5 text-[12.5px] leading-relaxed text-ink">
+    <p className="px-0.5 text-[13.5px] leading-[21px] text-ink">
       {text}
       {streaming && (
         <span
@@ -284,33 +286,64 @@ function useReplayFrames(): readonly EveMessage[] | null {
  * ──────────────────────────────────────────────────────────── */
 
 /**
- * One durable eve session per student × course (face.md "Workspace filesystem =
- * materialized view"). The shell outlives course navigation, so remount on
- * `courseId`: a course switch must never continue the previous course's
- * transcript. The durable form — server-side hydration handing this component an
- * `initialSession` (`sessionId` + `streamIndex`) with `resume: true` — arrives
- * with `hydrateWorkspace` in M3; this is the honest interim boundary.
+ * One durable eve session per student × course × chat (face.md "Workspace
+ * filesystem = materialized view"). The shell outlives navigation, so remount
+ * on `courseId`/`chatId`: switching course *or* chat must never continue the
+ * previous transcript.
+ *
+ * TODO(core): the durable form — server-side hydration handing this component
+ * an `initialSession` (`sessionId` + `streamIndex`) with `resume: true`, keyed
+ * by a real `chats` row — arrives with `hydrateWorkspace` in M3. Until then a
+ * chat id selects a *fresh* eve session, so reopening a chat shows an empty
+ * transcript: the sidebar list is real, the history behind it is not yet.
  */
-export function ChatRail({ courseId }: { courseId: string }) {
-  return <CourseChatRail key={courseId} courseId={courseId} />
+export function ChatTranscript({
+  courseId,
+  chatId,
+  courseCode,
+}: {
+  courseId: string
+  chatId: string
+  courseCode?: string
+}) {
+  return (
+    <CourseChatTranscript
+      key={`${courseId}:${chatId}`}
+      courseId={courseId}
+      chatId={chatId}
+      courseCode={courseCode}
+    />
+  )
 }
 
-function CourseChatRail({ courseId }: { courseId: string }) {
+function CourseChatTranscript({
+  courseId,
+  chatId,
+  courseCode,
+}: {
+  courseId: string
+  chatId: string
+  courseCode?: string
+}) {
   const dials = useDialKit(
-    "Chat rail",
+    "Chat",
     {
       /** how long a new rail item takes to settle in */
       revealMs: [220, 80, 600] as [number, number, number],
       /** delay between consecutive items in the same paint */
       staggerMs: [28, 0, 120] as [number, number, number],
       /** minimum height of a collapsed result row */
-      rowHeight: [26, 20, 48] as [number, number, number],
-      /** vertical gap between rail items */
-      gap: [10, 4, 24] as [number, number, number],
+      rowHeight: [28, 20, 48] as [number, number, number],
+      /** vertical gap between transcript items */
+      gap: [16, 4, 36] as [number, number, number],
+      /** width the transcript is held to, so lines stay readable */
+      maxWidth: [820, 560, 1100] as [number, number, number],
+      /** padding around the transcript and the composer */
+      pad: [24, 8, 48] as [number, number, number],
     },
     /* `id`/`persist` are options, not dials — and persistence is dev-only so a
      * tuned value can never override the shipped defaults in production. */
-    { id: "chat-rail", persist: process.env.NODE_ENV !== "production" }
+    { id: "chat-view", persist: process.env.NODE_ENV !== "production" }
   )
 
   const agent = useEveAgent({ agent: "workspace" })
@@ -372,18 +405,20 @@ function CourseChatRail({ courseId }: { courseId: string }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto">
       <div
-        ref={scroller}
-        className="flex min-h-0 flex-1 flex-col overflow-y-auto p-4"
-        style={{ gap: dials.gap }}
+        className="mx-auto flex w-full flex-col"
+        style={{
+          gap: dials.gap,
+          maxWidth: dials.maxWidth,
+          padding: dials.pad,
+        }}
       >
         {items.length === 0 && !errorText ? (
-          <div className="mt-auto">
-            <EmptyState
-              line="Chat opens when there's something in the viewport to talk about."
-              detail="This is workspace chat, not planning chat — “explain problem 3”, “what does the syllabus say about late work”. What to do and when stays in the thread."
-            />
-          </div>
+          <EmptyState
+            line="Nothing said in this chat yet."
+            detail="This is workspace chat, not planning chat — “explain problem 3”, “what does the syllabus say about late work”. What to do and when stays in the thread."
+          />
         ) : (
           items.map((item, index) => (
             <div
@@ -432,10 +467,15 @@ function CourseChatRail({ courseId }: { courseId: string }) {
             </p>
           </div>
         )}
+        </div>
       </div>
 
       {/* composer — PromptBar grammar, one input, no model picker */}
-      <div className="shrink-0 border-t border-line p-3">
+      <div
+        className="shrink-0 border-t border-line"
+        style={{ padding: dials.pad, paddingBlock: dials.pad * 0.6 }}
+      >
+        <div className="mx-auto w-full" style={{ maxWidth: dials.maxWidth }}>
         {replaying && (
           <p className="mb-2 text-[11.5px] text-ink-3">
             Replaying a recorded eve stream — no model is running.
@@ -448,7 +488,10 @@ function CourseChatRail({ courseId }: { courseId: string }) {
               : `${pending.length} changes are waiting on you above.`}
           </p>
         )}
-        <div className="flex items-end gap-2 rounded-card bg-surface px-2.5 py-2 shadow-card">
+        {/* `globals.css` clears the outline on `textarea:focus-visible` (it
+         * would trace the inner box, not the composer), so the composer itself
+         * carries the focus ring — otherwise tabbing here shows nothing. */}
+        <div className="flex items-end gap-2.5 rounded-card bg-surface px-3.5 py-2.5 shadow-card focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-accent">
           <textarea
             rows={1}
             value={draft}
@@ -461,10 +504,10 @@ function CourseChatRail({ courseId }: { courseId: string }) {
               }
             }}
             placeholder={
-              disabled ? "Reconnecting…" : "Ask about this course's materials"
+              disabled ? "Reconnecting…" : "Ask about this course's materials…"
             }
             aria-label="Message the workspace agent"
-            className="max-h-28 min-w-0 flex-1 resize-none bg-transparent py-1 text-[12.5px] leading-relaxed text-ink outline-none placeholder:text-ink-3 disabled:opacity-60"
+            className="max-h-32 min-w-0 flex-1 resize-none bg-transparent py-1.5 text-[13.5px] leading-[18px] text-ink outline-none placeholder:text-ink-3 disabled:opacity-60"
           />
           <Button
             size="xs"
@@ -475,9 +518,17 @@ function CourseChatRail({ courseId }: { courseId: string }) {
             {busy ? "Steer" : "Send"}
           </Button>
         </div>
+        {/* the scope rule, said out loud (vision §8) */}
+        <p className="mt-2 text-[11.5px] text-ink-3">
+          Scoped to {courseCode ?? "this course"}. For “what should I do
+          today”, text the line.
+        </p>
+        </div>
       </div>
 
-      <span className="sr-only">course {courseId}</span>
+      <span className="sr-only">
+        course {courseId} · chat {chatId}
+      </span>
     </div>
   )
 }

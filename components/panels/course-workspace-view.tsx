@@ -15,11 +15,12 @@ import { daysAway, percent } from "@/lib/format"
 import { useChanges, useCourse, useCourses, useDeadlines } from "@/lib/data/hooks"
 
 /**
- * Course workspace — **shell only** in Milestone 1 (face.md M1 #5): grading
- * scheme, upcoming, materials, artifacts. The workspace agent and the
- * artifact-scoped chat arrive in Milestone 3, when there is something to talk
- * about; we deliberately don't ship a chat rail with nothing to chat about, so
- * `ChatRail` is an honest placeholder.
+ * Course **Overview** — the landing page of course mode (vision §8): grading
+ * scheme as stated, what's upcoming, materials, artifacts.
+ *
+ * Chat is no longer here or in the rail: it is its own viewport under
+ * `/courses/[id]/chats/[chatId]`, listed in the sidebar. Materials and
+ * artifacts stay honest placeholders until Milestone 3.
  */
 export function CourseWorkspaceView({ courseId }: { courseId: string }) {
   const course = useCourse(courseId)
@@ -63,7 +64,7 @@ export function CourseWorkspaceView({ courseId }: { courseId: string }) {
 
   return (
     <>
-      <ViewportHeader title={course.name} meta={course.code} />
+      <ViewportHeader title={course.name} meta={`${course.code} · Overview`} />
       <ViewportBody>
         <section className="flex flex-col gap-3">
           <SectionHeader

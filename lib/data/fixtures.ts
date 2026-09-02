@@ -12,6 +12,7 @@
 import type {
   Change,
   Course,
+  CourseChat,
   Deadline,
   Provenance,
   Source,
@@ -767,3 +768,36 @@ export const studentSignals: StudentSignal[] = [
     provenance: signal("chat", "thread/2026-08-29", 48),
   },
 ]
+
+/* ── course chats ───────────────────────────────────────────────────────────
+ * TODO(core): there is no `chats` table yet. These stand in for persisted eve
+ * sessions so the course sidebar and the chat viewport have something true-
+ * shaped to render; `useCourseChats` is the only reader.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+const CHAT_TITLES: Record<string, string[]> = {
+  course_orgchem: [
+    "Carbonyl mechanisms — why does the nucleophile go there",
+    "Problem set 4, question 2",
+    "What the syllabus says about late work",
+  ],
+  course_algos: [
+    "Dijkstra vs. Bellman-Ford for PA3",
+    "Big-O on the recursion in lecture 9",
+  ],
+  course_micro: [
+    "Deadweight loss — walk me through the graph",
+    "Midterm prep — what's actually on it",
+    "Elasticity problem 3",
+  ],
+  course_modernism: ["Close reading — the last paragraph of Ulysses ch. 3"],
+}
+
+export const courseChats: CourseChat[] = courses.flatMap((course) =>
+  (CHAT_TITLES[course._id] ?? []).map((title, index) => ({
+    _id: `chat_${course._id}_${index + 1}`,
+    courseId: course._id,
+    title,
+    startedAt: hoursAgo(18 + index * 53),
+  }))
+)
