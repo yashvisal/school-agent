@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useDialKit } from "dialkit"
 import { Plus, X } from "lucide-react"
@@ -16,6 +17,11 @@ import { useCourse, useCourseChats } from "@/lib/data/hooks"
  *
  * The strip is **UI state** (`lib/workspace/chat-tabs.ts`, sessionStorage per
  * course); which chats exist is data. Nothing here is truth (vision §10).
+ *
+ * **Semantics.** These are not ARIA tabs: each one is a link to a URL, and a
+ * `role="tab"` would make its close button presentational to assistive tech
+ * (descendants of a tab are). So it's a `nav` of links with `aria-current`,
+ * each paired with a sibling close button — which is what they actually are.
  */
 export function CourseChatView({
   courseId,
@@ -38,8 +44,12 @@ export function CourseChatView({
       tabHeight: [30, 24, 44] as [number, number, number],
       /** gap between tabs */
       tabGap: [2, 0, 10] as [number, number, number],
-      /** how wide a tab's title may get before it truncates */
+      /** a tab never gets narrower than this, so the strip stays readable */
+      tabMinWidth: [104, 56, 240] as [number, number, number],
+      /** …nor wider: past this the title truncates */
       tabMaxWidth: [200, 96, 360] as [number, number, number],
+      /** width of the fade over an overflowing edge */
+      fadeWidth: [24, 0, 64] as [number, number, number],
     },
     { id: "chat-tabs", persist: process.env.NODE_ENV !== "production" }
   )
@@ -75,55 +85,120 @@ export function CourseChatView({
     router.push(next ? `${base}/chats/${next}` : base)
   }
 
+  /* Which edges of the strip have more tabs behind them. Measured from the
+   * scroll handler and a ResizeObserver — never set synchronously in an
+   * effect, which would cascade a render every time the strip repaints. */
+  const scroller = React.useRef<HTMLElement | null>(null)
+  const [edges, setEdges] = React.useState({ left: false, right: false })
+
+  const measure = React.useCallback(() => {
+    const el = scroller.current
+    if (!el) return
+    const left = el.scrollLeft > 1
+    const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1
+    setEdges((prev) =>
+      prev.left === left && prev.right === right ? prev : { left, right }
+    )
+  }, [])
+
+  React.useEffect(() => {
+    const el = scroller.current
+    if (!el) return
+    /* observing fires once on `observe`, so this also does the first
+     * measurement — no synchronous setState in the effect body */
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    for (const child of Array.from(el.children)) observer.observe(child)
+    return () => observer.disconnect()
+  }, [measure, openIds.length])
+
   return (
     <>
       <div
-        className="flex shrink-0 items-center overflow-x-auto border-b border-line px-2"
-        style={{ height: dials.stripHeight, gap: dials.tabGap }}
-        role="tablist"
-        aria-label="Open chats"
+        className="flex shrink-0 items-center border-b border-line px-2"
+        style={{ height: dials.stripHeight }}
       >
-        {openIds.map((id) => {
-          const active = id === chatId
-          return (
-            <div
-              key={id}
-              role="tab"
-              aria-selected={active}
-              className={`group flex shrink-0 items-center gap-1.5 rounded-[8px] pr-1 pl-2.5 transition-colors duration-100 ${
-                active ? "bg-hover-2" : "hover:bg-hover"
-              }`}
-              style={{ height: dials.tabHeight }}
-            >
-              <button
-                type="button"
-                onClick={() => router.push(`${base}/chats/${id}`)}
-                title={titleOf(id)}
-                className={`min-w-0 truncate text-left text-[12.5px] font-medium ${
-                  active ? "text-ink" : "text-ink-2"
-                }`}
-                style={{ maxWidth: dials.tabMaxWidth }}
-              >
-                {titleOf(id)}
-              </button>
-              <button
-                type="button"
-                aria-label={`Close ${titleOf(id)}`}
-                onClick={() => close(id)}
-                className="flex size-5 shrink-0 items-center justify-center rounded-[5px] text-ink-3 transition-colors duration-100 hover:bg-hover-2 hover:text-ink"
-              >
-                <X size={12} />
-              </button>
-            </div>
-          )
-        })}
+        {/* `min-w-0` is what keeps the strip's overflow inside the strip:
+         * without it the flex item grows to its content and the whole viewport
+         * gets a horizontal scrollbar. */}
+        <div className="relative flex min-w-0 flex-1 items-center">
+          <nav
+            ref={scroller}
+            onScroll={measure}
+            aria-label="Open chats"
+            className="no-scrollbar flex min-w-0 flex-1 flex-nowrap items-center overflow-x-auto overflow-y-hidden"
+            style={{ gap: dials.tabGap, height: dials.tabHeight }}
+          >
+            {openIds.map((id) => {
+              const active = id === chatId
+              const title = titleOf(id)
+              return (
+                <span
+                  key={id}
+                  className={`flex h-full shrink-0 items-center gap-1 rounded-[8px] pr-1 pl-2.5 transition-colors duration-100 ${
+                    active ? "bg-hover-2" : "hover:bg-hover"
+                  }`}
+                  style={{
+                    minWidth: dials.tabMinWidth,
+                    maxWidth: dials.tabMaxWidth,
+                  }}
+                >
+                  <Link
+                    href={`${base}/chats/${id}`}
+                    aria-current={active ? "page" : undefined}
+                    title={title}
+                    className={`min-w-0 flex-1 truncate text-[12.5px] font-medium ${
+                      active ? "text-ink" : "text-ink-2"
+                    }`}
+                  >
+                    {title}
+                  </Link>
+                  <button
+                    type="button"
+                    aria-label={`Close ${title}`}
+                    onClick={() => close(id)}
+                    className="flex size-5 shrink-0 items-center justify-center rounded-[5px] text-ink-3 transition-colors duration-100 hover:bg-hover-2 hover:text-ink"
+                  >
+                    <X size={12} />
+                  </button>
+                </span>
+              )
+            })}
+          </nav>
 
+          {/* the strip's own edges, so a cut-off tab reads as "there's more"
+           * rather than as a rendering bug */}
+          {edges.left && (
+            <span
+              aria-hidden
+              className="pointer-events-none absolute inset-y-0 left-0"
+              style={{
+                width: dials.fadeWidth,
+                background:
+                  "linear-gradient(to right, var(--page), transparent)",
+              }}
+            />
+          )}
+          {edges.right && (
+            <span
+              aria-hidden
+              className="pointer-events-none absolute inset-y-0 right-0"
+              style={{
+                width: dials.fadeWidth,
+                background:
+                  "linear-gradient(to left, var(--page), transparent)",
+              }}
+            />
+          )}
+        </div>
+
+        {/* outside the scroll area, so it is reachable at any scroll position */}
         <button
           type="button"
           aria-label="New chat"
           title="New chat"
           onClick={() => router.push(`${base}/chats/${newChatId()}`)}
-          className="flex shrink-0 items-center justify-center rounded-[8px] px-2 text-ink-3 transition-colors duration-100 hover:bg-hover-2 hover:text-ink"
+          className="ml-1 flex shrink-0 items-center justify-center rounded-[8px] px-2 text-ink-3 transition-colors duration-100 hover:bg-hover-2 hover:text-ink"
           style={{ height: dials.tabHeight }}
         >
           <Plus size={14} />
