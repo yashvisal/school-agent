@@ -60,8 +60,15 @@ Both are mounted dev-only via `components/dev-tools.tsx`; neither ships to produ
   for panels shared across pages. Once values are settled, bake them into tokens/constants and
   remove the hook (or leave it if the surface is still being designed). The Beautiful UI
   harness already uses DialKit — keep it when forking.
-- Rule of thumb: Agentation is for *what's wrong*, DialKit is for *how much*. Tone regressions
-  and layout bugs → expect Agentation notes. Motion/feel/density → offer DialKit dials.
+- **Paper** (MCP `paper`) — design before build. The founder reviews and refines screens in
+  Paper; the reference file is "school-agent — Face IA (two-mode nav)"
+  (https://app.paper.design/file/01M1G30PV8CCP27Z0XXXJGMF6K). **Before building a new surface,
+  read its artboard** (`get_basic_info` → `get_tree_summary` / `get_jsx` for exact values) and
+  match it; if a surface has no artboard yet, lay it out in Paper first with 2–3 dummy-data
+  scenarios and ask for review. Tokens there mirror `app/globals.css`.
+- Rule of thumb: Agentation is for *what's wrong*, DialKit is for *how much*, Paper is for
+  *what it should be* before it exists. Tone regressions and layout bugs → expect Agentation
+  notes. Motion/feel/density → offer DialKit dials. New screens → Paper first.
 
 ## Commands
 
