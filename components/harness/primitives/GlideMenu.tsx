@@ -1,12 +1,14 @@
 "use client";
 
-import { useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 type GlideMenuProps = {
   children: ReactNode;
   className?: string;
   highlightClassName?: string;
   rowSelector?: string;
+  /** inline style on the row container — the gap between rows is a dial */
+  style?: CSSProperties;
 };
 
 /** A single hover layer that glides between interactive menu rows. */
@@ -15,6 +17,7 @@ export default function GlideMenu({
   className = "",
   highlightClassName = "inset-x-0 rounded-[8px] bg-hover",
   rowSelector = "[data-menu-row]",
+  style,
 }: GlideMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState<{ top: number; height: number } | null>(null);
@@ -41,6 +44,7 @@ export default function GlideMenu({
         if (!ref.current?.contains(event.relatedTarget as Node | null)) setVisible(false);
       }}
       className={`group/glide-menu relative ${className}`}
+      style={style}
     >
       <span
         aria-hidden
