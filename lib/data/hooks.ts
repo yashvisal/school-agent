@@ -330,6 +330,16 @@ function coversFor(doc: Doc<"sources">, courses: Course[] | undefined): string[]
       return courses
         .filter((c) => c.sourceRefs.siteUrl !== undefined)
         .map((c) => c.code)
+    case "syllabus": {
+      /* A syllabus is uploaded *for* one course; Core keeps that on the
+       * source config (`{ courseId }` — validators.ts `sourceFields`). Without
+       * this branch `covers` was always empty and every per-course count that
+       * read it rendered 0. */
+      const id = asBag(doc.config).courseId
+      const course =
+        typeof id === "string" ? courses.find((c) => c._id === id) : undefined
+      return course ? [course.code] : []
+    }
     default:
       return []
   }
