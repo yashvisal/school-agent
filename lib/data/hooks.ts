@@ -5,11 +5,13 @@ import { useQuery } from "convex/react"
 
 import { api } from "@/convex/_generated/api"
 import type { Doc } from "@/convex/_generated/dataModel"
+import { courseChats } from "./fixtures"
 import type {
   Change,
   ChangeField,
   ChangeOrigin,
   Course,
+  CourseChat,
   Deadline,
   Provenance,
   Source,
@@ -374,6 +376,39 @@ export function useStudentSignals(): StudentSignal[] | undefined {
       })),
     [docs]
   )
+}
+
+/* ── course chats (fixture-backed) ──────────────────────────────────────── */
+
+/**
+ * The per-course chat list (vision §8 "Chats": plural, persisted eve sessions).
+ *
+ * TODO(core): Core has no `chats` table yet, so this reads `fixtures.ts` —
+ * the one hook in this file that is not a Convex subscription. It keeps the
+ * others' contract (`undefined` while "loading", then data) and returns the
+ * shape Core will return, so the swap is a one-line change here and nothing in
+ * the UI moves. Open-tab state is *not* here: that is UI state (vision §10 —
+ * nothing durable about a student lives outside Convex).
+ */
+export function useCourseChats(courseId: string): CourseChat[] | undefined {
+  return useMemo(
+    () => courseChats.filter((chat) => chat.courseId === courseId),
+    [courseId]
+  )
+}
+
+/**
+ * One chat by id, or `null` when it is not in the list — a chat the student
+ * just started ("New chat") is a real, openable id that no fixture knows about,
+ * so callers treat `null` as "new", not as an error.
+ */
+export function useCourseChat(
+  courseId: string,
+  chatId: string
+): CourseChat | undefined | null {
+  const chats = useCourseChats(courseId)
+  if (chats === undefined) return undefined
+  return chats.find((c) => c._id === chatId) ?? null
 }
 
 /* ── derived helpers (never stored — vision §9 facts vs. inference) ─────── */

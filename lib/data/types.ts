@@ -241,3 +241,18 @@ export type StudentSignal = {
  * out). Derived from codegen so Face can never drift from Core's shape again.
  */
 export type Viewer = FunctionReturnType<typeof api.auth.viewer>
+
+/**
+ * A persisted per-course chat session (vision §8 "Chats"). **Not in Core yet** —
+ * there is no `chats` table, so `useCourseChats` serves fixtures. The shape is
+ * the one Core will return: an id, a title, and when it started. Face renders
+ * only the title in the sidebar; the rest is here so the hook doesn't change
+ * shape when Core lands it.
+ */
+export type CourseChat = {
+  _id: Id
+  courseId: Id
+  title: string
+  /** ISO 8601 */
+  startedAt: string
+}
