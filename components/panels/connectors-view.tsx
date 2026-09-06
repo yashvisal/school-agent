@@ -312,8 +312,23 @@ type UploadRow = {
   courseId: string
   status: "queued" | "uploading" | "parsing" | "error"
   sourceId?: string
+  /**
+   * What that source's `lastPolledAt` was BEFORE this upload started. A
+   * schedule re-upload reuses the existing source row, which already carries a
+   * poll from last time, so "has ever polled" would read Parsed the instant
+   * the upload landed. Only a value later than this one is *this* extraction.
+   */
+  polledAtBefore?: string | null
   error?: string
 }
+
+/**
+ * Files can be tens of megabytes over a bad connection, and a `fetch` with no
+ * signal never gives up — uploads run one at a time, so a single stalled one
+ * freezes every file behind it. A minute is generous for a syllabus and short
+ * enough that a dead connection surfaces as an error the student can retry.
+ */
+const UPLOAD_TIMEOUT_MS = 60_000
 
 let uploadSeq = 0
 
@@ -338,13 +353,16 @@ function UploadSection({
   const [busy, setBusy] = React.useState(false)
   const inputRef = React.useRef<HTMLInputElement>(null)
 
-  const polledSourceIds = React.useMemo(
-    () =>
-      new Set(
-        (sources ?? []).filter((s) => s.lastPolledAt !== null).map((s) => s._id)
-      ),
+  const polledAtById = React.useMemo(
+    () => new Map((sources ?? []).map((s) => [s._id, s.lastPolledAt])),
     [sources]
   )
+  /* Read at the moment an upload begins, not at the render that selected it:
+   * uploads are awaited one at a time and a poll can land in between. */
+  const polledAtRef = React.useRef(polledAtById)
+  React.useEffect(() => {
+    polledAtRef.current = polledAtById
+  }, [polledAtById])
 
   const patch = (id: string, next: Partial<UploadRow>) =>
     setRows((current) =>
@@ -372,6 +390,7 @@ function UploadSection({
         method: "POST",
         headers: { "Content-Type": row.file.type || "application/octet-stream" },
         body: row.file,
+        signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
       })
       if (!response.ok) {
         throw new Error(`storage returned ${response.status}`)
@@ -385,7 +404,12 @@ function UploadSection({
           : {}),
         filename: row.file.name,
       })
-      patch(row.id, { status: "parsing", sourceId })
+      patch(row.id, {
+        status: "parsing",
+        sourceId,
+        // `?? null` covers a brand-new source, which has no poll at all yet.
+        polledAtBefore: polledAtRef.current.get(sourceId) ?? null,
+      })
     } catch (cause) {
       patch(row.id, { status: "error", error: errorMessage(cause) })
     }
@@ -454,7 +478,11 @@ function UploadSection({
                 )}
                 <UploadStatus
                   row={row}
-                  parsed={row.sourceId !== undefined && polledSourceIds.has(row.sourceId)}
+                  parsed={
+                    row.sourceId !== undefined &&
+                    (polledAtById.get(row.sourceId) ?? null) !== null &&
+                    polledAtById.get(row.sourceId) !== row.polledAtBefore
+                  }
                 />
               </li>
             ))}
