@@ -797,6 +797,38 @@ describe("tenancy — a change may only ever touch its own student", () => {
     expect(student?.clerkId).toBe(CLERK_ID)
   })
 
+  test("a morningHourLocal that is not a whole hour 0-23 is refused, not rounded", async () => {
+    const t = setupTest()
+    const { studentId } = await seed(t)
+
+    const propose = (morningHourLocal: number) =>
+      t.mutation(internal.changes.propose, {
+        studentId,
+        kind: "availability_updated",
+        entity: { table: "students", id: studentId },
+        after: { morningHourLocal },
+        origin: "chat",
+        confirmedInline: true,
+        evidence: { quotedReply: "yeah" },
+      })
+
+    // "half seven" mis-parsed, and both ends of the clock walked off.
+    for (const bad of [7.5, -1, 24]) {
+      await expect(propose(bad)).rejects.toThrow(
+        /400: morningHourLocal must be an integer hour/
+      )
+    }
+
+    // Refused outright — never clamped to an hour the student never chose.
+    let student = await t.run((ctx) => ctx.db.get("students", studentId))
+    expect(student?.morningHourLocal).toBeUndefined()
+
+    // The last legal hour of the day still goes through.
+    await propose(23)
+    student = await t.run((ctx) => ctx.db.get("students", studentId))
+    expect(student?.morningHourLocal).toBe(23)
+  })
+
   test("a manual change may set the phone, and it is normalized on the way in", async () => {
     const t = setupTest()
     const { studentId } = await seed(t)
