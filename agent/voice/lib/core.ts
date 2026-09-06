@@ -102,6 +102,8 @@ export type PlanOption = {
   fits: PlanFit[]
   remainingWindowsBeforeDue: number
   facts: string[]
+  /** What was already committed for this work on `date`, if anything. */
+  planned?: { startMin: number; endMin: number }
   pending?: string[]
   signals?: string[]
   overdue?: boolean
@@ -189,6 +191,39 @@ export async function proposeChange(
   change: VoiceChange,
 ): Promise<{ changeId: string; status: string; tier: string }> {
   return await corePost("/voice/proposeChange", { studentId, change })
+}
+
+export type PlanPick = {
+  taskId?: string
+  deadlineId?: string
+  title?: string
+  courseId?: string
+  startMin: number
+  endMin: number
+}
+
+export type CommittedBlock = {
+  taskId: string
+  deadlineId?: string
+  title: string
+  plannedFor: string
+  plannedStartMin: number
+  plannedEndMin: number
+}
+
+/**
+ * Commit the day's plan (VOICE_TOOLS.md §4b). Core re-verifies every pick
+ * against its own feasible set and refuses the whole commit — a `400`, and this
+ * throws — if any block is not inside a free window for that work. The commit is
+ * authoritative for `date`: anything the agent planned there and did not re-pick
+ * comes back unplanned.
+ */
+export async function commitPlan(
+  studentId: string,
+  date: string,
+  picks: PlanPick[],
+): Promise<{ committed: CommittedBlock[]; unplanned: number }> {
+  return await corePost("/voice/commitPlan", { studentId, date, picks })
 }
 
 export async function recordSignal(
