@@ -77,6 +77,15 @@ function usersOf(payload: unknown): SpectrumUser[] {
   return []
 }
 
+function totalOf(payload: unknown): number | undefined {
+  const data = unwrap(payload)
+  if (data && typeof data === "object") {
+    const total = (data as { total?: unknown }).total
+    if (typeof total === "number") return total
+  }
+  return undefined
+}
+
 function userIdOf(payload: unknown): string | undefined {
   const data = unwrap(payload)
   if (data && typeof data === "object") {
@@ -110,13 +119,50 @@ async function spectrum(
   return { ok: response.ok, status: response.status, text, json }
 }
 
-/** The registered user for this number, if Photon already has one. */
-async function findUser(creds: Credentials, phone: string): Promise<string | undefined> {
-  const found = await spectrum(creds, `/users/?search=${encodeURIComponent(phone)}&limit=100`)
-  if (!found.ok) return undefined
-  const match = usersOf(found.json).find((user) => user.phoneNumber === phone)
-  return typeof match?.id === "string" ? match.id : undefined
+/** 20 pages of 100 is 2 000 users — well past a shared line's documented capacity. */
+const USER_PAGE_SIZE = 100
+const MAX_USER_PAGES = 20
+
+/**
+ * `{ ok: false }` means we do not KNOW whether the number is registered, which
+ * is not the same as knowing it is not.
+ */
+type Lookup = { ok: true; userId?: string } | { ok: false; status: number; text: string }
+
+/**
+ * The registered user for this number, if Photon already has one.
+ *
+ * Paginated: `search` is not documented to match an exact phone number, so a
+ * project with more registered users than one page could hide the match behind
+ * an offset. Walks until the number is found, the list is exhausted, or the
+ * page bound is hit.
+ */
+async function findUser(creds: Credentials, phone: string): Promise<Lookup> {
+  for (let page = 0; page < MAX_USER_PAGES; page++) {
+    const offset = page * USER_PAGE_SIZE
+    const found = await spectrum(
+      creds,
+      `/users/?search=${encodeURIComponent(phone)}&limit=${USER_PAGE_SIZE}&offset=${offset}`,
+    )
+    if (!found.ok) return { ok: false, status: found.status, text: found.text }
+
+    const users = usersOf(found.json)
+    const match = users.find((user) => user.phoneNumber === phone)
+    if (typeof match?.id === "string") return { ok: true, userId: match.id }
+
+    if (users.length < USER_PAGE_SIZE) break
+    const total = totalOf(found.json)
+    if (total !== undefined && offset + users.length >= total) break
+  }
+  return { ok: true }
 }
+
+/** The 502 a failed Spectrum call becomes. */
+const spectrumFailed = (what: string, status: number, text: string) =>
+  Response.json(
+    { error: `Photon ${what} returned ${status}: ${text.slice(0, 500)}` },
+    { status: 502 },
+  )
 
 export default defineChannel({
   routes: [
@@ -141,11 +187,24 @@ export default defineChannel({
 
       try {
         // Check-then-create, so re-registering a number the founder (or an
-        // earlier save) already registered is a success, not a 4xx.
+        // earlier save) already registered is a success, not a 4xx. A lookup
+        // that FAILED stops here rather than falling through to create: we
+        // would be creating blind, and a duplicate user for a number Photon
+        // already holds is worse than telling Core to retry.
         const existing = await findUser(creds, phone)
-        if (existing) {
+        if (!existing.ok) {
+          console.error("[voice/contact] lookup failed", {
+            to: last4(phone),
+            status: existing.status,
+          })
+          return spectrumFailed("user lookup", existing.status, existing.text)
+        }
+        if (existing.userId) {
           console.info("[voice/contact] already registered", { to: last4(phone) })
-          return Response.json({ status: "already_registered", userId: existing }, { status: 200 })
+          return Response.json(
+            { status: "already_registered", userId: existing.userId },
+            { status: 200 },
+          )
         }
 
         const created = await spectrum(creds, "/users/", {
@@ -157,20 +216,24 @@ export default defineChannel({
           },
         })
         if (!created.ok) {
-          // The create raced another registration (or Photon rejects the
-          // duplicate outright): whoever won, the number is registered.
-          const raced = created.status === 409 ? await findUser(creds, phone) : undefined
-          if (raced) {
-            return Response.json({ status: "already_registered", userId: raced }, { status: 200 })
+          // A 409 usually means the create raced another registration. Success
+          // is reported only when a second lookup actually FINDS the number: a
+          // 409 we cannot corroborate stays a 502, so nothing ever tells Core a
+          // number is reachable on the strength of an error code alone.
+          if (created.status === 409) {
+            const raced = await findUser(creds, phone)
+            if (raced.ok && raced.userId) {
+              return Response.json(
+                { status: "already_registered", userId: raced.userId },
+                { status: 200 },
+              )
+            }
           }
           console.error("[voice/contact] registration failed", {
             to: last4(phone),
             status: created.status,
           })
-          return Response.json(
-            { error: `Photon returned ${created.status}: ${created.text.slice(0, 500)}` },
-            { status: 502 },
-          )
+          return spectrumFailed("registration", created.status, created.text)
         }
 
         const userId = userIdOf(created.json)
