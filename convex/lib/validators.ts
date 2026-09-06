@@ -86,6 +86,22 @@ export const checkInPreferenceV = v.union(
   v.literal("more")
 )
 
+/**
+ * The outcome of registering the student's number with Photon. Routing
+ * bookkeeping, not a fact about the student's semester — written directly by
+ * `internal.students.markPhotonRegistration`, never through `changes`, exactly
+ * like `inboundCount`. Settings reads it to say whether we can text this number.
+ */
+export const photonRegistrationV = v.object({
+  status: v.union(
+    v.literal("registered"),
+    v.literal("failed"),
+    v.literal("skipped")
+  ),
+  at: v.number(),
+  error: v.optional(v.string()),
+})
+
 export const courseStatusV = v.union(
   v.literal("active"),
   v.literal("concluded"),
@@ -267,6 +283,12 @@ export const studentFields = {
   morningHourLocal: v.optional(v.number()),
   /** How chatty the student wants Voice to be (`checkInPreferenceV`). */
   checkInPreference: v.optional(checkInPreferenceV),
+  /**
+   * Whether Photon knows this number. A shared line can only message a
+   * REGISTERED user (voice.md "Pricing and quotas"), so saving a phone
+   * schedules `internal.students.registerContact` and the result lands here.
+   */
+  photonRegistration: v.optional(photonRegistrationV),
   /**
    * Lifetime count of deduped inbound iMessages (`inboundMessages` rows have a
    * TTL; the count does not). Photon suppresses proactive sends to a contact

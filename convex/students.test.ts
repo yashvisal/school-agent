@@ -1,6 +1,6 @@
-import { describe, expect, test } from "vitest"
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 
-import { api } from "./_generated/api"
+import { api, internal } from "./_generated/api"
 import type { Id } from "./_generated/dataModel"
 import { CLERK_ID, OTHER_CLERK_ID, setupTest } from "./test.setup"
 
@@ -20,6 +20,7 @@ import { CLERK_ID, OTHER_CLERK_ID, setupTest } from "./test.setup"
 
 const TZ = "America/New_York"
 const PHONE = "+15551230000"
+const VOICE_URL = "https://voice.example.com"
 
 const WEEKDAYS = {
   weekly: [1, 2, 3, 4, 5].map((dayOfWeek) => ({
@@ -56,6 +57,42 @@ const changesFor = (t: ReturnType<typeof setupTest>, studentId: Id<"students">) 
 
 const load = (t: ReturnType<typeof setupTest>, studentId: Id<"students">) =>
   t.run(async (ctx) => ctx.db.get("students", studentId))
+
+/**
+ * Saving a phone SCHEDULES the Photon registration, so every test in this file
+ * runs with `fetch` and the Voice env stubbed — a stray scheduled action must
+ * never reach the network — and any test that moves a phone drains the
+ * scheduler itself rather than leaving work for the next one.
+ */
+let fetchMock: ReturnType<typeof vi.fn>
+
+beforeEach(() => {
+  fetchMock = vi.fn(
+    async () =>
+      new Response(JSON.stringify({ status: "registered", userId: "usr_A" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+  )
+  vi.stubGlobal("fetch", fetchMock)
+  vi.stubEnv("EVE_VOICE_URL", VOICE_URL)
+  vi.stubEnv("VOICE_TRIGGER_SECRET", "trigger-secret")
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
+})
+
+/** `updatePrefs` schedules the registration; a test must drain it to see it. */
+const drain = async (t: ReturnType<typeof setupTest>) => {
+  vi.useFakeTimers()
+  try {
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+  } finally {
+    vi.useRealTimers()
+  }
+}
 
 describe("updatePrefs", () => {
   test("a signed-out caller cannot touch anyone's settings", async () => {
@@ -170,6 +207,7 @@ describe("updatePrefs", () => {
     expect((await load(t, studentId))?.phone).toBe(PHONE)
     const [change] = await changesFor(t, studentId)
     expect(change.after).toEqual({ phone: PHONE })
+    await drain(t)
   })
 
   test("a number with no usable digits is refused", async () => {
@@ -271,5 +309,109 @@ describe("updatePrefs", () => {
 
     expect((await load(t, theirs))?.morningHourLocal).toBe(6)
     expect((await load(t, mine))?.morningHourLocal).toBeUndefined()
+  })
+})
+
+describe("registerContact", () => {
+  test("POSTs the contact route and records the registration", async () => {
+    const t = setupTest()
+    const studentId = await seed(t, { phone: PHONE })
+
+    const outcome = await t.action(internal.students.registerContact, { studentId })
+
+    expect(outcome.status).toBe("registered")
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe(`${VOICE_URL}/eve/agents/voice/eve/v1/contact`)
+    expect(init.headers["x-voice-trigger-secret"]).toBe("trigger-secret")
+    expect(JSON.parse(init.body)).toEqual({ phone: PHONE })
+
+    const student = await load(t, studentId)
+    expect(student?.photonRegistration?.status).toBe("registered")
+    expect(student?.photonRegistration?.at).toBeGreaterThan(0)
+    expect(student?.photonRegistration?.error).toBeUndefined()
+  })
+
+  test("a non-2xx from Voice is a recorded failure, not a thrown one", async () => {
+    const t = setupTest()
+    const studentId = await seed(t, { phone: PHONE })
+    fetchMock.mockResolvedValue(new Response("photon down", { status: 502 }))
+
+    const outcome = await t.action(internal.students.registerContact, { studentId })
+
+    expect(outcome.status).toBe("failed")
+    expect(outcome.error).toContain("502")
+    expect((await load(t, studentId))?.photonRegistration?.status).toBe("failed")
+  })
+
+  test("a transport error is a recorded failure", async () => {
+    const t = setupTest()
+    const studentId = await seed(t, { phone: PHONE })
+    fetchMock.mockRejectedValue(new Error("ECONNREFUSED"))
+
+    const outcome = await t.action(internal.students.registerContact, { studentId })
+
+    expect(outcome).toMatchObject({ status: "failed", error: "ECONNREFUSED" })
+  })
+
+  test("no Voice attached to this deployment is skipped, not failed", async () => {
+    const t = setupTest()
+    const studentId = await seed(t, { phone: PHONE })
+    vi.stubEnv("EVE_VOICE_URL", "")
+
+    const outcome = await t.action(internal.students.registerContact, { studentId })
+
+    expect(outcome).toMatchObject({ status: "skipped", error: "EVE_VOICE_URL not set" })
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect((await load(t, studentId))?.photonRegistration?.status).toBe("skipped")
+  })
+
+  test("a missing secret never POSTs a number unauthenticated", async () => {
+    const t = setupTest()
+    const studentId = await seed(t, { phone: PHONE })
+    vi.stubEnv("VOICE_TRIGGER_SECRET", "")
+
+    const outcome = await t.action(internal.students.registerContact, { studentId })
+
+    expect(outcome).toMatchObject({
+      status: "skipped",
+      error: "VOICE_TRIGGER_SECRET not set",
+    })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  test("a student with no phone is skipped", async () => {
+    const t = setupTest()
+    const studentId = await seed(t)
+
+    const outcome = await t.action(internal.students.registerContact, { studentId })
+
+    expect(outcome).toMatchObject({ status: "skipped", error: "no phone on file" })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  test("saving a phone in Settings schedules the registration", async () => {
+    const t = setupTest()
+    const studentId = await seed(t)
+
+    await t
+      .withIdentity({ subject: CLERK_ID })
+      .mutation(api.students.updatePrefs, { phone: PHONE })
+    await drain(t)
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect((await load(t, studentId))?.photonRegistration?.status).toBe("registered")
+  })
+
+  test("an edit that does not touch the phone schedules nothing", async () => {
+    const t = setupTest()
+    await seed(t, { phone: PHONE })
+
+    await t
+      .withIdentity({ subject: CLERK_ID })
+      .mutation(api.students.updatePrefs, { morningHourLocal: 6 })
+    await drain(t)
+
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })

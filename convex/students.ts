@@ -1,10 +1,22 @@
 import { v } from "convex/values"
 
-import { internalQuery, mutation } from "./_generated/server"
+import { internal } from "./_generated/api"
+import type { Doc } from "./_generated/dataModel"
+import {
+  internalAction,
+  internalMutation,
+  internalQuery,
+  mutation,
+} from "./_generated/server"
 import { requireIdentity } from "./lib/auth"
 import { approveChangeInternal, proposeChangeInternal } from "./lib/changes"
 import { normalizePhone } from "./lib/phone"
-import { availabilityV, checkInPreferenceV, studentDocV } from "./lib/validators"
+import {
+  availabilityV,
+  checkInPreferenceV,
+  photonRegistrationV,
+  studentDocV,
+} from "./lib/validators"
 
 const DEFAULT_TIMEZONE = "America/New_York"
 
@@ -131,6 +143,11 @@ function sameValue(a: unknown, b: unknown): boolean {
  *
  * Nothing changed → no change row. A `changes` feed that fills with empty edits
  * every time a form is re-submitted is worse than no feed at all.
+ *
+ * Saving a new phone additionally schedules `registerContact`: a Photon shared
+ * line can only message a REGISTERED user (voice.md "Pricing and quotas"), and
+ * until this existed the only registered number was the founder's, registered
+ * by hand during the spike.
  */
 export const updatePrefs = mutation({
   args: {
@@ -233,6 +250,134 @@ export const updatePrefs = mutation({
     })
     await approveChangeInternal(ctx, changeId, "web")
 
+    if (changed.includes("phone")) {
+      // Network call, so an action, so scheduled: the mutation must commit the
+      // new number whether or not Photon is reachable.
+      await ctx.scheduler.runAfter(0, internal.students.registerContact, {
+        studentId: student._id,
+      })
+    }
+
     return { studentId: student._id, changed }
+  },
+})
+
+// ---------------------------------------------------------------------------
+// Photon contact registration
+// ---------------------------------------------------------------------------
+
+/**
+ * The Voice contact route, mounted by `withEve` on the Next deployment
+ * (`agent/voice/channels/contact.ts`). Same host and same shared secret as the
+ * nightly trigger — Photon credentials live only on the Voice host, so Core
+ * asks Voice to register rather than talking to Spectrum itself.
+ */
+export const VOICE_CONTACT_PATH = "/eve/agents/voice/eve/v1/contact"
+
+/** How long the registration POST may take before it is a failure. */
+export const VOICE_CONTACT_TIMEOUT_MS = 15_000
+
+type RegistrationOutcome = {
+  status: "registered" | "failed" | "skipped"
+  at: number
+  error?: string
+}
+
+/**
+ * Records the registration outcome on the student row. **Not** through
+ * `changes`: this is routing bookkeeping about our own transport, like
+ * `inboundCount` — nothing a student proposes, approves, or should see in the
+ * change feed. Settings reads it to say "we can text this number" or
+ * "couldn't register — try again".
+ */
+export const markPhotonRegistration = internalMutation({
+  args: { studentId: v.id("students"), registration: photonRegistrationV },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const student = await ctx.db.get("students", args.studentId)
+    if (!student) return null
+    await ctx.db.patch("students", args.studentId, {
+      photonRegistration: args.registration,
+    })
+    return null
+  },
+})
+
+/**
+ * `POST {EVE_VOICE_URL}/eve/agents/voice/eve/v1/contact` with
+ * `x-voice-trigger-secret` and `{ phone }`, mirroring `triggerVoice`
+ * (convex/nightly.ts) down to the skipped/failed semantics: a deployment with
+ * no Voice attached, or one that set the URL but not the secret, records
+ * `skipped` and never POSTs unauthenticated.
+ *
+ * Idempotent by construction — the route resolves an already-registered number
+ * to the same success — so a retry is free.
+ */
+async function postContact(phone: string): Promise<RegistrationOutcome> {
+  const at = Date.now()
+  const baseUrl = process.env.EVE_VOICE_URL
+  if (!baseUrl) return { status: "skipped", at, error: "EVE_VOICE_URL not set" }
+  const secret = process.env.VOICE_TRIGGER_SECRET
+  if (!secret) {
+    return { status: "skipped", at, error: "VOICE_TRIGGER_SECRET not set" }
+  }
+
+  try {
+    const response = await fetch(
+      `${baseUrl.replace(/\/+$/, "")}${VOICE_CONTACT_PATH}`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-voice-trigger-secret": secret,
+        },
+        // Core stores no name for a student today, so no `firstName` is sent;
+        // the route takes one optionally for when it does.
+        body: JSON.stringify({ phone }),
+        signal: AbortSignal.timeout(VOICE_CONTACT_TIMEOUT_MS),
+      }
+    )
+    if (!response.ok) {
+      const text = await response.text()
+      return {
+        status: "failed",
+        at: Date.now(),
+        error: `voice returned ${response.status}: ${text.slice(0, 500)}`,
+      }
+    }
+    return { status: "registered", at: Date.now() }
+  } catch (error) {
+    return {
+      status: "failed",
+      at: Date.now(),
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
+/**
+ * Register the student's number with Photon so a shared line may message them.
+ * Scheduled by `updatePrefs` on every phone save; also safe to run by hand:
+ * `npx convex run students:registerContact '{"studentId": "j57a..."}'`.
+ */
+export const registerContact = internalAction({
+  args: { studentId: v.id("students") },
+  returns: photonRegistrationV,
+  handler: async (ctx, args): Promise<RegistrationOutcome> => {
+    const student: Doc<"students"> | null = await ctx.runQuery(
+      internal.students.get,
+      { studentId: args.studentId }
+    )
+    if (!student) throw new Error("404: student not found")
+
+    const outcome: RegistrationOutcome = student.phone
+      ? await postContact(student.phone)
+      : { status: "skipped", at: Date.now(), error: "no phone on file" }
+
+    await ctx.runMutation(internal.students.markPhotonRegistration, {
+      studentId: args.studentId,
+      registration: outcome,
+    })
+    return outcome
   },
 })
