@@ -341,7 +341,7 @@ const STUDENT_KEYS = [
   "classBlocks",
   "availability",
   "status",
-  "nightlyHourLocal",
+  "morningHourLocal",
 ] as const
 
 /**
@@ -356,7 +356,7 @@ const CHAT_STUDENT_KEYS = [
   "availability",
   "semesterStart",
   "semesterEnd",
-  "nightlyHourLocal",
+  "morningHourLocal",
 ] as const
 
 /**
