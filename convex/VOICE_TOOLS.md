@@ -153,7 +153,7 @@ each option annotated with plain-English facts.
 
 ### Caching and `planRunId`
 
-If the morning pass computed a plan for that day within the last **6 hours**, and
+If the nightly pass computed a plan for that day within the last **6 hours**, and
 nothing has landed in `changes` since it was computed, that stored snapshot is
 returned with `cached: true` and its `planRunId`.
 
@@ -166,7 +166,7 @@ you just applied yourself with `confirmedInline: true`. Calling
 `getFeasibleActions` again straight after a `proposeChange` therefore gives you
 the corrected day, not the stale one.
 
-This matters for the morning run: the trigger message carries a `planRunId`, and
+This matters for the nightly run: the trigger message carries a `planRunId`, and
 calling `getFeasibleActions` for the same `date` returns that same snapshot — so
 the morning text and every follow-up in the conversation describe one consistent
 day rather than silently re-planning mid-thread.
@@ -298,7 +298,7 @@ payload that tries to say otherwise. Two consequences worth knowing:
 
 **Scope on `entity.table: "students"`:** a chat-origin change may write only
 `classBlocks`, `availability`, `semesterStart`, `semesterEnd`, and
-`morningHourLocal`. `phone`, `timezone`, `status`, and `clerkId` are identity and
+`nightlyHourLocal`. `phone`, `timezone`, `status`, and `clerkId` are identity and
 routing; they are silently dropped from the patch. And `entity.id` must be the
 same student as `studentId` — a change can only ever touch its own student, on
 any table. Anything else is a `403`.
@@ -486,7 +486,7 @@ seen-set. Three jobs in one write:
    *do not dispatch* — return `null` from `onMessage`.
 2. **Contact warming.** Each accepted (non-duplicate) inbound bumps
    `students.inboundCount`. Photon caps a line at 10 replies to a contact who
-   has sent fewer than 3 messages, so the morning trigger (§8) is gated on
+   has sent fewer than 3 messages, so the nightly trigger (§8) is gated on
    `inboundCount ≥ 3`.
 3. **The evidence log.** Rows are what `evidence.inboundMessageId` (§4) is
    verified against.
@@ -517,16 +517,13 @@ response.
 
 ---
 
-## 8. The morning trigger
+## 8. The nightly trigger
 
-Every hour, Core's cron (`crons.ts` → `internal.nightly.tick` — the module keeps
-its historical name) finds each active student whose **local** clock just struck
-their morning hour (`morningHourLocal`, default `7`) and who has no plan run for
-**today** yet — plus, for the six hours after that, any student whose run for
-today `failed` or is stuck. The plan is for the day the student is waking into,
-not the day after it, and the planner drops the hours already elapsed, so a 7am
-run never offers a 6am window. For each student it
-expires stale pending changes, computes that day's plan, stores it as a
+Every hour, Core's cron (`crons.ts` → `internal.nightly.tick`) finds each active
+student whose **local** clock just struck their nightly hour (`nightlyHourLocal`,
+default `4`) and who has no plan run for tomorrow yet — plus, for the six hours
+after that, any student whose run for tomorrow `failed` or is stuck. For each, it
+expires stale pending changes, computes tomorrow's plan, stores it as a
 `planRuns` row, and then POSTs the **Voice trigger route** — the custom channel
 route `agent/voice/channels/trigger.ts` mounts under `withEve` on the Next
 deployment. (This is the reconciled path: eve's generic `POST /eve/v1/session`
@@ -582,7 +579,7 @@ the cron double-fires or the network drops a response.
 |---|---|
 | `pending` | Plan stored, not yet sent. A run still `pending` an hour later is treated as stuck and retried. |
 | `triggered` | eve accepted the session. Terminal — never re-sent. |
-| `failed` | eve returned non-2xx, timed out (15s), or the request errored. Retried by a later tick, up to 6 hours after the student's morning hour. |
+| `failed` | eve returned non-2xx, timed out (15s), or the request errored. Retried by a later tick, up to 6 hours after the student's nightly hour. |
 | `skipped` | `EVE_VOICE_URL` or `VOICE_TRIGGER_SECRET` is unset on this deployment, the student has no phone or is not yet warmed (§8 gates), or the student's timezone is unusable. A missing URL and an unusable timezone are terminal for that student-day; the other reasons are recoverable and retried by later ticks in the window. |
 
 ### Manual trigger
@@ -592,7 +589,7 @@ npx convex run nightly:runNow '{"studentId": "j57a..."}'
 npx convex run nightly:runNow '{"studentId": "j57a...", "date": "2026-09-15"}'
 ```
 
-Defaults to today in the student's timezone, like the pass. Idempotent on the same
+Defaults to tomorrow in the student's timezone. Idempotent on the same
 student-day, so it will not re-send an already-triggered run.
 
 ---

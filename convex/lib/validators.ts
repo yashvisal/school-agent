@@ -248,12 +248,8 @@ export const studentFields = {
   classBlocks: v.array(timeBlockV),
   availability: availabilityV,
   status: studentStatusV,
-  /**
-   * Local hour (0-23) the morning precompute + Voice trigger should run. The
-   * pass plans that same day, so this is also when the student's day is dated
-   * from; unset means `DEFAULT_MORNING_HOUR` (7am local).
-   */
-  morningHourLocal: v.optional(v.number()),
+  /** Local hour (0-23) the nightly precompute + Voice trigger should run. */
+  nightlyHourLocal: v.optional(v.number()),
   /**
    * Lifetime count of deduped inbound iMessages (`inboundMessages` rows have a
    * TTL; the count does not). Photon suppresses proactive sends to a contact

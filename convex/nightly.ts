@@ -7,7 +7,7 @@ import { internalAction, internalMutation, internalQuery } from "./_generated/se
 import { WARMED_MIN_INBOUND } from "./inbound"
 import type { FeasibleActions } from "./lib/planner"
 import { DEFAULT_HORIZON_DAYS } from "./lib/planner"
-import { localDate, localParts } from "./lib/time"
+import { addDays, localDate, localParts } from "./lib/time"
 import {
   pendingAnnotationV,
   planFeasibleV,
@@ -17,17 +17,10 @@ import {
 } from "./lib/validators"
 
 /**
- * Morning precompute → Voice trigger (core.md, "Nightly precompute"; vision §6.1).
- *
- * The name is historical. The file, the functions (`internal.nightly.*`), the
- * cron job, and the `nightly:<studentId>:<date>` operationId prefix all keep it
- * because the deployed cron and existing rows refer to them; the pass itself is
- * a **morning** pass. It fires at the student's local morning hour (default 7am)
- * and plans *that same day*, so the text they wake to describes the day they are
- * about to live rather than the one after it.
+ * Nightly precompute → Voice trigger (core.md, "Nightly precompute"; vision §6.1).
  *
  * Division of labour: **Convex decides who gets a run and what is true; eve
- * decides what to say.** This file computes today's feasible set, stores it as
+ * decides what to say.** This file computes tomorrow's feasible set, stores it as
  * a `planRuns` snapshot, and pokes the Voice trigger route
  * (`VOICE_TRIGGER_PATH`, see `triggerVoice`) with an idempotent `operationId`.
  * It composes nothing.
@@ -37,7 +30,7 @@ import {
  *   `storeRun` refreshes the existing row rather than making a second one.
  * - A run already `triggered` never POSTs again.
  * - A run that `failed` (eve down) or is stuck `pending` IS retried, by a later
- *   tick within `RETRY_WINDOW_HOURS` of the student's morning hour.
+ *   tick within `RETRY_WINDOW_HOURS` of the student's nightly hour.
  * - The trigger route keeps its own per-process `operationId` set, so even a
  *   double POST inside one deployment instance is absorbed there too.
  *
@@ -47,7 +40,7 @@ import {
  */
 
 /** Local hour the pass runs when the student has not chosen one. */
-export const DEFAULT_MORNING_HOUR = 7
+export const DEFAULT_NIGHTLY_HOUR = 4
 
 /** Pending changes older than the planning horizon are expired, never applied (rule 5). */
 const PENDING_TTL_MS = DEFAULT_HORIZON_DAYS * 24 * 60 * 60 * 1000
@@ -199,7 +192,7 @@ export const storeRun = internalMutation({
 
 /**
  * Records a student the pass could not even date: an unusable `timezone` means
- * no local hour and no local calendar day, so there is no plan to compute. It is a data
+ * no local hour and no "tomorrow", so there is no plan to compute. It is a data
  * problem, and the fix is for someone to see it — a silent `continue` leaves a
  * student who never gets a morning text and no trace of why (CR 3892156241).
  * Keyed on the UTC day so one bad row produces one marker per day, not per tick.
@@ -272,7 +265,7 @@ export const markTrigger = internalMutation({
 export const STUCK_PENDING_MS = 60 * 60 * 1000
 
 /**
- * How many hours after the morning hour the pass keeps checking for a run to
+ * How many hours after the nightly hour the pass keeps checking for a run to
  * recover. Bounded so the extra `findRun` read is paid on a handful of ticks a
  * day rather than all 24.
  */
@@ -325,8 +318,8 @@ function shouldRun(
 }
 
 /**
- * Hourly. Every active student whose local clock just struck their morning hour
- * and whose run for today is missing, failed, or stuck gets one. Hourly-and-
+ * Hourly. Every active student whose local clock just struck their nightly hour
+ * and whose run for tomorrow is missing, failed, or stuck gets one. Hourly-and-
  * idempotent rather than one cron per timezone: timezones are per-student data,
  * not deployment config.
  *
@@ -359,10 +352,7 @@ export const tick = internalAction({
         let date: string
         try {
           hour = localParts(now, student.timezone).hour
-          // Today, not tomorrow: the student is woken with a plan for the day
-          // they are starting, and the planner offers only the part of it that
-          // is still ahead of them (`windowsForDate` subtracts elapsed minutes).
-          date = localDate(now, student.timezone)
+          date = addDays(localDate(now, student.timezone), 1)
         } catch (error) {
           // A data problem, not a reason to stall — but it is recorded, so a
           // student who silently never gets a text is discoverable.
@@ -380,11 +370,11 @@ export const tick = internalAction({
           })
           continue
         }
-        // A first run starts exactly on the student's local morning hour. For
+        // A first run starts exactly on the student's local nightly hour. For
         // the few hours after it, the pass still *looks* — but only to retry a
         // run that failed or got stuck, never to start a day's first one late.
-        const morningHour = student.morningHourLocal ?? DEFAULT_MORNING_HOUR
-        const hoursSince = hour - morningHour
+        const nightlyHour = student.nightlyHourLocal ?? DEFAULT_NIGHTLY_HOUR
+        const hoursSince = hour - nightlyHour
         if (hoursSince < 0 || hoursSince > RETRY_WINDOW_HOURS) continue
 
         const existing: {
@@ -506,7 +496,7 @@ export const runForStudent = internalAction({
 /**
  * Manual entry point for testing:
  * `npx convex run nightly:runNow '{"studentId": "..."}'`
- * Defaults to today in the student's own timezone, like the pass itself.
+ * Defaults to tomorrow in the student's own timezone.
  */
 export const runNow = internalAction({
   args: {
@@ -521,7 +511,7 @@ export const runNow = internalAction({
       studentId: args.studentId,
     })
     if (!student) throw new Error("404: student not found")
-    const date = args.date ?? localDate(now, student.timezone)
+    const date = args.date ?? addDays(localDate(now, student.timezone), 1)
 
     const result: RunResult = await ctx.runAction(internal.nightly.runForStudent, {
       studentId: args.studentId,
