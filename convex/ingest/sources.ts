@@ -239,6 +239,9 @@ export const setEnabled = mutation({
  */
 const RESYNC_COOLDOWN_MS = { upload: 5 * 60_000, poll: 60_000 } as const
 
+/** A "re-sync requested" health older than this is an abandoned run, not a live one. */
+const RESYNC_IN_FLIGHT_MAX_MS = 15 * 60_000
+
 export const resync = mutation({
   args: { sourceId: v.id("sources") },
   returns: v.object({ scheduled: v.boolean() }),
@@ -265,6 +268,25 @@ export const resync = mutation({
       // The message is the UI copy: Face shows it verbatim on the card.
       throw new Error(
         `429: re-sync was requested ${ago}s ago; try again in ${wait}s`
+      )
+    }
+
+    // Past the cooldown, an UPLOAD re-extraction that is still running must not
+    // be joined by a second one: two concurrent model calls on the same
+    // document is the exact bill the cooldown exists to prevent. "Running" is
+    // the health this mutation wrote and the adapter has not yet replaced; a
+    // marker older than `RESYNC_IN_FLIGHT_MAX_MS` is an abandoned run, so a
+    // crash cannot wedge the button. Feed polls are a fetch, not a model call,
+    // and their own cooldown is enough.
+    const inFlight =
+      isUploadKind(source.kind) &&
+      source.health.status === "unknown" &&
+      source.health.message === "re-sync requested" &&
+      now - source.health.at < RESYNC_IN_FLIGHT_MAX_MS
+    if (inFlight) {
+      const ago = Math.round((now - source.health.at) / 1000)
+      throw new Error(
+        `409: re-sync is still running (requested ${ago}s ago); wait for it to finish`
       )
     }
 

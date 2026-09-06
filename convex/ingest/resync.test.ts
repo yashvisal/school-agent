@@ -188,15 +188,29 @@ describe("sources.resync dispatch", () => {
 })
 
 describe("sources.resync cooldown", () => {
-  /** Backdates the last request so the cooldown can be crossed without waiting. */
+  /**
+   * Backdates the last request so the cooldown can be crossed without waiting.
+   * The "re-sync requested" health is written together with the request stamp,
+   * so it is backdated together — otherwise the in-flight guard would read a
+   * fresh marker on a request that is supposedly minutes old.
+   */
   const requestedAgo = (
     t: ReturnType<typeof setupTest>,
     sourceId: Id<"sources">,
     ms: number
   ) =>
-    t.run(async (ctx) =>
-      ctx.db.patch("sources", sourceId, { lastResyncRequestedAt: Date.now() - ms })
-    )
+    t.run(async (ctx) => {
+      const at = Date.now() - ms
+      const source = await ctx.db.get("sources", sourceId)
+      const health =
+        source?.health.message === "re-sync requested"
+          ? { ...source.health, at }
+          : source?.health
+      await ctx.db.patch("sources", sourceId, {
+        lastResyncRequestedAt: at,
+        ...(health ? { health } : {}),
+      })
+    })
 
   test("a second tap inside the window is a 429 and schedules nothing more", async () => {
     const t = setupTest()
@@ -239,7 +253,12 @@ describe("sources.resync cooldown", () => {
       as.mutation(api.ingest.sources.resync, { sourceId: upload })
     ).rejects.toThrow(/429/)
 
+    // Six minutes on, and the extraction has finished — the adapter replaced
+    // the health this mutation wrote — so the upload is free again.
     await requestedAgo(t, upload, 6 * 60_000)
+    await t.run(async (ctx) =>
+      ctx.db.patch("sources", upload, { health: { status: "ok", at: Date.now() } })
+    )
     expect(await as.mutation(api.ingest.sources.resync, { sourceId: upload })).toEqual({
       scheduled: true,
     })
@@ -290,5 +309,76 @@ describe("sources.resync health", () => {
     const source = await t.run(async (ctx) => ctx.db.get("sources", sourceId))
     expect(source?.health.status).toBe("unknown")
     expect(source?.health.message).toBe("re-sync requested")
+  })
+})
+
+describe("sources.resync in flight", () => {
+  /** An upload source whose stored document is real enough to re-extract. */
+  const uploadSource = async (t: ReturnType<typeof setupTest>, studentId: Id<"students">) => {
+    const storageId = await t.run(async (ctx) =>
+      ctx.storage.store(new Blob(["# syllabus"], { type: "text/markdown" }))
+    )
+    return await addSource(t, studentId, "syllabus", { identity: "syllabus:unassigned", storageId })
+  }
+
+  test("an upload extraction still running past the cooldown is not joined by a second one", async () => {
+    const t = setupTest()
+    const { studentId } = await seed(t)
+    const sourceId = await uploadSource(t, studentId)
+    const as = t.withIdentity({ subject: CLERK_ID })
+
+    // Requested well past the five-minute cooldown, but the adapter never
+    // replaced the health this mutation wrote — the extraction is still going.
+    const requestedAt = Date.now() - 6 * 60_000
+    await t.run(async (ctx) =>
+      ctx.db.patch("sources", sourceId, {
+        lastResyncRequestedAt: requestedAt,
+        health: { status: "unknown", message: "re-sync requested", at: requestedAt },
+      })
+    )
+
+    await expect(as.mutation(api.ingest.sources.resync, { sourceId })).rejects.toThrow(
+      /409: re-sync is still running/
+    )
+    expect(await scheduled(t)).toHaveLength(0)
+  })
+
+  test("an abandoned in-flight marker does not wedge the button", async () => {
+    const t = setupTest()
+    const { studentId } = await seed(t)
+    const sourceId = await uploadSource(t, studentId)
+    const as = t.withIdentity({ subject: CLERK_ID })
+
+    const requestedAt = Date.now() - 16 * 60_000
+    await t.run(async (ctx) =>
+      ctx.db.patch("sources", sourceId, {
+        lastResyncRequestedAt: requestedAt,
+        health: { status: "unknown", message: "re-sync requested", at: requestedAt },
+      })
+    )
+
+    await expect(as.mutation(api.ingest.sources.resync, { sourceId })).resolves.toEqual({
+      scheduled: true,
+    })
+    expect(await scheduled(t)).toHaveLength(1)
+  })
+
+  test("a feed poll still marked running is only ever gated by its own cooldown", async () => {
+    const t = setupTest()
+    const { studentId } = await seed(t)
+    const sourceId = await addSource(t, studentId, "ical", { url: "https://x.edu/u.ics" })
+    const as = t.withIdentity({ subject: CLERK_ID })
+
+    const requestedAt = Date.now() - 90_000
+    await t.run(async (ctx) =>
+      ctx.db.patch("sources", sourceId, {
+        lastResyncRequestedAt: requestedAt,
+        health: { status: "unknown", message: "re-sync requested", at: requestedAt },
+      })
+    )
+
+    await expect(as.mutation(api.ingest.sources.resync, { sourceId })).resolves.toEqual({
+      scheduled: true,
+    })
   })
 })
