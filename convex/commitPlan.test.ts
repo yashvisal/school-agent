@@ -352,6 +352,63 @@ describe("verification", () => {
     )
   })
 
+  test("two picks covering the same minutes are refused", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    const first = await addDeadline(t, seeded)
+    const second = await addDeadline(t, seeded, {
+      title: "Pset 4",
+      externalIds: { canvasAssignmentId: "5002" },
+    })
+
+    await expect(
+      commit(t, seeded.studentId, [
+        { deadlineId: first, startMin: 675, endMin: 795 },
+        { deadlineId: second, startMin: 720, endMin: 840 },
+      ])
+    ).rejects.toThrow(
+      /400: picks "Pset 3" .* and "Pset 4" .* overlap \(12pm–1:15pm\)/
+    )
+
+    const { tasks, changes } = await counts(t, seeded.studentId)
+    expect(tasks).toHaveLength(0)
+    expect(changes).toHaveLength(0)
+  })
+
+  test("back-to-back blocks in one window are fine", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    const first = await addDeadline(t, seeded)
+    const second = await addDeadline(t, seeded, {
+      title: "Pset 4",
+      externalIds: { canvasAssignmentId: "5002" },
+    })
+
+    // 11:15–1:15 then 1:15–2:15: touching, not overlapping.
+    const result = await commit(t, seeded.studentId, [
+      { deadlineId: first, startMin: 675, endMin: 795 },
+      { deadlineId: second, startMin: 795, endMin: 855 },
+    ])
+    expect(result.committed).toHaveLength(2)
+  })
+
+  test("a pick that names no work, or half-names it, is refused", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    await addDeadline(t, seeded)
+
+    await expect(
+      commit(t, seeded.studentId, [{ ...AFTERNOON }])
+    ).rejects.toThrow(/identifies no work/)
+
+    await expect(
+      commit(t, seeded.studentId, [{ title: "Pset 3", ...AFTERNOON }])
+    ).rejects.toThrow(/without a courseId/)
+
+    const { changes } = await counts(t, seeded.studentId)
+    expect(changes).toHaveLength(0)
+  })
+
   test("the same work twice in one commit is refused", async () => {
     const t = setupTest()
     const seeded = await seed(t)
@@ -424,6 +481,70 @@ describe("a commit replaces the day", () => {
 
     const still = await t.run((ctx) => ctx.db.get("tasks", mine))
     expect(still).toMatchObject({ plannedFor: DATE, plannedStartMin: 1000 })
+  })
+
+  test("work slipped from an earlier day moves, and the feed says where from", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    const deadlineId = await addDeadline(t, seeded)
+
+    // Friday's plan, not done. Saturday's replan names the same work — the
+    // retention moment: "didn't do it friday, do it saturday".
+    const friday = await commit(t, seeded.studentId, [{ deadlineId, ...MORNING }])
+    const taskId = friday.committed[0].taskId
+
+    const saturday = await commit(
+      t,
+      seeded.studentId,
+      [{ taskId, ...AFTERNOON }],
+      "2026-09-15"
+    )
+    expect(saturday.committed[0].plannedFor).toBe("2026-09-15")
+
+    const task = await t.run((ctx) => ctx.db.get("tasks", taskId))
+    expect(task).toMatchObject({
+      plannedFor: "2026-09-15",
+      plannedStartMin: AFTERNOON.startMin,
+      plannedEndMin: AFTERNOON.endMin,
+    })
+
+    // The move is explicit, never silent: the day it came off is named, and the
+    // block it had there is on the change.
+    const { changes } = await counts(t, seeded.studentId)
+    expect(changes.at(-1)).toMatchObject({
+      kind: "task_updated",
+      origin: "planner",
+      reason: `replanned from ${DATE} in the thread for 2026-09-15`,
+      before: {
+        plannedFor: DATE,
+        plannedStartMin: MORNING.startMin,
+        plannedEndMin: MORNING.endMin,
+      },
+    })
+  })
+
+  test("pulling tomorrow's work into today is recorded the same way", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    const deadlineId = await addDeadline(t, seeded)
+
+    const tomorrow = await commit(
+      t,
+      seeded.studentId,
+      [{ deadlineId, ...AFTERNOON }],
+      "2026-09-15"
+    )
+    const taskId = tomorrow.committed[0].taskId
+
+    await commit(t, seeded.studentId, [{ taskId, ...MORNING }], DATE)
+
+    const task = await t.run((ctx) => ctx.db.get("tasks", taskId))
+    expect(task).toMatchObject({ plannedFor: DATE, plannedStartMin: MORNING.startMin })
+
+    const { changes } = await counts(t, seeded.studentId)
+    expect(changes.at(-1)?.reason).toBe(
+      `replanned from 2026-09-15 in the thread for ${DATE}`
+    )
   })
 
   test("a plan for another day leaves this day alone", async () => {

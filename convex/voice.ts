@@ -272,6 +272,21 @@ const describePick = (pick: PlanPick, option?: PlanOption): string => {
 }
 
 /**
+ * A pick must carry exactly one complete identity. Reported separately from "no
+ * such option", because they are different mistakes: a half-named pick (a bare
+ * `title` with no `courseId`) is a malformed request, and saying it "matches
+ * nothing in the feasible set" would send the agent looking for the wrong bug.
+ */
+function identityProblem(pick: PlanPick): string | null {
+  if (pick.taskId || pick.deadlineId) return null
+  if (pick.title && pick.courseId) return null
+  if (pick.title || pick.courseId) {
+    return "names work by title without a courseId (or the other way round); free-standing work needs both"
+  }
+  return "identifies no work: give a taskId, else a deadlineId, else title + courseId"
+}
+
+/**
  * The option this pick names, or `undefined`. Ids first, because they are
  * unambiguous; the title match is the fallback for free-standing work, which the
  * agent may only have a name for.
@@ -336,6 +351,22 @@ function blockProblem(
     if (pick.startMin >= window.startMin && pick.endMin <= latest) return null
   }
   return `is not inside a free window for that work on ${date}`
+}
+
+/**
+ * The change-feed reason for a task's new block.
+ *
+ * A task moving BETWEEN days is the retention moment this product exists for —
+ * "didn't do it friday, do it saturday" — so it is allowed, in either direction
+ * (yesterday's slipped work pulled forward, tomorrow's work pulled into today).
+ * What it must not be is silent: the day it came off is named, so the feed shows
+ * a move rather than a task that mysteriously appeared on a new date. The
+ * `before` on the change carries that day's block as well.
+ */
+function reasonFor(previous: string | undefined, date: string): string {
+  if (!previous) return `planned in the thread for ${date}`
+  if (previous === date) return `replanned in the thread for ${date}`
+  return `replanned from ${previous} in the thread for ${date}`
 }
 
 /**
@@ -413,6 +444,9 @@ export const commitPlan = internalMutation({
     const verified: { pick: PlanPick; option: PlanOption }[] = []
     const named = new Set<string>()
     for (const pick of args.picks) {
+      const malformed = identityProblem(pick)
+      if (malformed) throw new Error(`400: pick ${describePick(pick)} ${malformed}`)
+
       const option = matchOption(plan, pick)
       if (!option) {
         throw new Error(
@@ -428,6 +462,21 @@ export const commitPlan = internalMutation({
       const problem = blockProblem(plan, option, pick, args.date, student.timezone)
       if (problem) {
         throw new Error(`400: pick ${describePick(pick, option)} ${problem}`)
+      }
+      // A day is a sequence, not a set. Two blocks claiming the same minutes is
+      // not a plan the student can act on — and the agent said them one after
+      // another, so an overlap means it lost track of the clock, not that it
+      // meant to double-book.
+      for (const earlier of verified) {
+        const from = Math.max(earlier.pick.startMin, pick.startMin)
+        const to = Math.min(earlier.pick.endMin, pick.endMin)
+        if (from < to) {
+          throw new Error(
+            `400: picks ${describePick(earlier.pick, earlier.option)} and ` +
+              `${describePick(pick, option)} overlap ` +
+              `(${formatClock(from)}–${formatClock(to)})`
+          )
+        }
       }
       verified.push({ pick, option })
     }
@@ -481,7 +530,7 @@ export const commitPlan = internalMutation({
             after: block,
             origin: PLANNER_ORIGIN,
             planRunId: args.planRunId,
-            reason: `${task.plannedFor ? "replanned" : "planned"} in the thread for ${args.date}`,
+            reason: reasonFor(task.plannedFor, args.date),
           })
         }
         committed.push({
