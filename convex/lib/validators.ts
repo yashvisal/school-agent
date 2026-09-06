@@ -412,6 +412,14 @@ export const sourceFields = {
   config: v.any(),
   enabled: v.boolean(),
   lastPolledAt: v.optional(v.number()),
+  /**
+   * When the student last tapped "Re-sync now". Bookkeeping, not a fact about
+   * a source: it exists so `ingest.sources.resync` can enforce a cooldown. An
+   * upload re-sync is a model call every time (the extraction is re-run past
+   * the snapshot hash, or the button does nothing), so a held button would bill
+   * for a document that has not changed.
+   */
+  lastResyncRequestedAt: v.optional(v.number()),
   health: sourceHealthV,
 }
 

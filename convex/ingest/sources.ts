@@ -229,7 +229,16 @@ export const setEnabled = mutation({
  * Health is set to `unknown` synchronously so the card can show "syncing…" the
  * moment the mutation lands; the poll or extraction writes the real health when
  * it finishes, exactly as it does on the cron path.
+ *
+ * Rate-limited per source, because the button is cheap to press and the work
+ * behind it is not. An upload re-sync re-runs the extraction past the snapshot
+ * hash by design (otherwise an unchanged document is a no-op), so every tap is
+ * a model call whether or not the document moved — five minutes. A feed poll
+ * only costs a fetch, so it gets a shorter one, enough to absorb a double-tap
+ * and an impatient student.
  */
+const RESYNC_COOLDOWN_MS = { upload: 5 * 60_000, poll: 60_000 } as const
+
 export const resync = mutation({
   args: { sourceId: v.id("sources") },
   returns: v.object({ scheduled: v.boolean() }),
@@ -245,6 +254,30 @@ export const resync = mutation({
     // feed the student explicitly switched off and write changes from it.
     if (!source.enabled) throw new Error("400: source is disabled; enable it first")
 
+    const now = Date.now()
+    const cooldownMs = isUploadKind(source.kind)
+      ? RESYNC_COOLDOWN_MS.upload
+      : RESYNC_COOLDOWN_MS.poll
+    const since = source.lastResyncRequestedAt
+    if (since !== undefined && now - since < cooldownMs) {
+      const ago = Math.round((now - since) / 1000)
+      const wait = Math.ceil((cooldownMs - (now - since)) / 1000)
+      // The message is the UI copy: Face shows it verbatim on the card.
+      throw new Error(
+        `429: re-sync was requested ${ago}s ago; try again in ${wait}s`
+      )
+    }
+
+    // Stamped before anything is scheduled, so the cooldown starts the moment
+    // the request is accepted. A request that is then REFUSED (no stored
+    // document, no adapter) throws, which rolls the stamp back with the rest of
+    // the transaction — a rejected tap must not burn the student's next five
+    // minutes.
+    await ctx.db.patch("sources", args.sourceId, {
+      lastResyncRequestedAt: now,
+      health: { status: "unknown", message: "re-sync requested", at: now },
+    })
+
     if (isPollableKind(source.kind)) {
       await schedulePoll(ctx.scheduler, source.kind, args.sourceId)
     } else if (isUploadKind(source.kind)) {
@@ -259,9 +292,6 @@ export const resync = mutation({
       throw new Error(`400: re-sync is not supported for ${source.kind} sources yet`)
     }
 
-    await ctx.db.patch("sources", args.sourceId, {
-      health: { status: "unknown", message: "re-sync requested", at: Date.now() },
-    })
     return { scheduled: true }
   },
 })

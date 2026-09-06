@@ -187,6 +187,96 @@ describe("sources.resync dispatch", () => {
   })
 })
 
+describe("sources.resync cooldown", () => {
+  /** Backdates the last request so the cooldown can be crossed without waiting. */
+  const requestedAgo = (
+    t: ReturnType<typeof setupTest>,
+    sourceId: Id<"sources">,
+    ms: number
+  ) =>
+    t.run(async (ctx) =>
+      ctx.db.patch("sources", sourceId, { lastResyncRequestedAt: Date.now() - ms })
+    )
+
+  test("a second tap inside the window is a 429 and schedules nothing more", async () => {
+    const t = setupTest()
+    const { studentId } = await seed(t)
+    const sourceId = await addSource(t, studentId, "ical", { url: "https://x.edu/u.ics" })
+    const as = t.withIdentity({ subject: CLERK_ID })
+
+    await as.mutation(api.ingest.sources.resync, { sourceId })
+    expect(await scheduled(t)).toHaveLength(1)
+
+    await expect(
+      as.mutation(api.ingest.sources.resync, { sourceId })
+    ).rejects.toThrow(/429: re-sync was requested \d+s ago; try again in \d+s/)
+    expect(await scheduled(t)).toHaveLength(1)
+  })
+
+  test("a poll source is free again after a minute; an upload is not", async () => {
+    const t = setupTest()
+    const { studentId } = await seed(t)
+    const storageId = await t.run(async (ctx) =>
+      ctx.storage.store(new Blob(["# syllabus"], { type: "text/markdown" }))
+    )
+    const feed = await addSource(t, studentId, "ical", { url: "https://x.edu/u.ics" })
+    const upload = await addSource(t, studentId, "syllabus", {
+      identity: "syllabus:unassigned",
+      storageId,
+    })
+    const as = t.withIdentity({ subject: CLERK_ID })
+
+    await as.mutation(api.ingest.sources.resync, { sourceId: feed })
+    await as.mutation(api.ingest.sources.resync, { sourceId: upload })
+
+    // 90s later: the feed's 60s window has passed, the upload's 5min has not —
+    // an upload re-sync is a model call every time, so it is held longer.
+    await requestedAgo(t, feed, 90_000)
+    await requestedAgo(t, upload, 90_000)
+
+    await as.mutation(api.ingest.sources.resync, { sourceId: feed })
+    await expect(
+      as.mutation(api.ingest.sources.resync, { sourceId: upload })
+    ).rejects.toThrow(/429/)
+
+    await requestedAgo(t, upload, 6 * 60_000)
+    expect(await as.mutation(api.ingest.sources.resync, { sourceId: upload })).toEqual({
+      scheduled: true,
+    })
+  })
+
+  test("the cooldown is per source, not per student", async () => {
+    const t = setupTest()
+    const { studentId } = await seed(t)
+    const a = await addSource(t, studentId, "ical", { url: "https://x.edu/a.ics" })
+    const b = await addSource(t, studentId, "ical", { url: "https://x.edu/b.ics" })
+    const as = t.withIdentity({ subject: CLERK_ID })
+
+    await as.mutation(api.ingest.sources.resync, { sourceId: a })
+    expect(await as.mutation(api.ingest.sources.resync, { sourceId: b })).toEqual({
+      scheduled: true,
+    })
+  })
+
+  test("a refused request does not burn the cooldown", async () => {
+    const t = setupTest()
+    const { studentId } = await seed(t)
+    // No stored document: the mutation throws AFTER stamping, so the whole
+    // transaction — stamp included — must roll back.
+    const sourceId = await addSource(t, studentId, "schedule", { identity: "schedule" })
+    const as = t.withIdentity({ subject: CLERK_ID })
+
+    await expect(
+      as.mutation(api.ingest.sources.resync, { sourceId })
+    ).rejects.toThrow(/400/)
+
+    const source = await t.run(async (ctx) => ctx.db.get("sources", sourceId))
+    expect(source?.lastResyncRequestedAt).toBeUndefined()
+    // Health was not left saying "re-sync requested" for a request that failed.
+    expect(source?.health.status).toBe("ok")
+  })
+})
+
 describe("sources.resync health", () => {
   test("health flips to unknown so the card can show progress", async () => {
     const t = setupTest()
