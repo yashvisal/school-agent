@@ -1,5 +1,5 @@
 import { paginationOptsValidator } from "convex/server"
-import { v } from "convex/values"
+import { v, type Infer } from "convex/values"
 
 import { internal } from "./_generated/api"
 import type { MutationCtx } from "./_generated/server"
@@ -89,8 +89,12 @@ const manualEntityV = v.object({
   id: v.string(),
 })
 
-/** Which table each kind is allowed to name, so a kind cannot patch the wrong row. */
-const KIND_TABLE: Record<string, OwnedTable | null> = {
+/**
+ * Which table each kind is allowed to name, so a kind cannot patch the wrong
+ * row. Keyed by the kind union itself, so adding a literal to `manualKindV`
+ * without an entry here is a compile error rather than an unchecked table.
+ */
+const KIND_TABLE: Record<Infer<typeof manualKindV>, OwnedTable | null> = {
   deadline_moved: "deadlines",
   deadline_updated: "deadlines",
   deadline_removed: "deadlines",
@@ -451,12 +455,15 @@ async function approveBatchPage(
  * the queue still holds the rest).
  *
  * Each hop is its own transaction, so a 2,000-item parse does not have to fit
- * in one. `hops` is a runaway guard, not a limit anyone should reach: a page is
- * 200 rows and every hop approves a full page, so 50 hops is 10,000 changes
- * from a single upload. Reaching it means something is wrong, and it says so
- * rather than looping.
+ * in one. There is no hard stop: every row a page touches leaves the range it
+ * reads (approved by its `status`, failed by its `applyError`), so each hop is
+ * strictly smaller and the chain terminates by construction. A cap would only
+ * turn an unusually large parse into a silently half-approved one, which is
+ * the exact failure the drain exists to remove. `hops` is kept for the logs —
+ * past `NOISY_BATCH_HOPS` each hop says so, because a batch that size is worth
+ * a look even though it is being handled.
  */
-const MAX_BATCH_HOPS = 50
+const NOISY_BATCH_HOPS = 50
 
 export const approveBatchContinue = internalMutation({
   args: {
@@ -471,12 +478,11 @@ export const approveBatchContinue = internalMutation({
     // is internal and reachable only from that scheduler chain.
     const { more } = await approveBatchPage(ctx, args.studentId, args.batchId, args.via)
     if (!more) return null
-    if (args.hops >= MAX_BATCH_HOPS) {
-      console.error(
-        `changes.approveBatchContinue: batch ${args.batchId} still has pending rows ` +
-          `after ${MAX_BATCH_HOPS} hops (${MAX_BATCH_HOPS * BATCH_PAGE} changes); stopping`
+    if (args.hops >= NOISY_BATCH_HOPS) {
+      console.warn(
+        `changes.approveBatchContinue: batch ${args.batchId} still draining after ` +
+          `${args.hops} hops (${args.hops * BATCH_PAGE}+ changes); continuing`
       )
-      return null
     }
     await ctx.scheduler.runAfter(0, internal.changes.approveBatchContinue, {
       studentId: args.studentId,
