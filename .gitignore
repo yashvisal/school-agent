@@ -71,3 +71,6 @@ agent/voice/.spike/
 
 # local dev tooling (portable binaries, e.g. cloudflared for the trigger tunnel)
 /.tools/
+
+# local agent worktrees (never source)
+.claude/worktrees/
