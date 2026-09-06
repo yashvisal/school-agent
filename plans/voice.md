@@ -152,8 +152,8 @@ Attachments (item 3): outbound text + PDF + PNG delivered to the founder's phone
 ## Milestone 1 scope ("it talks")
 
 1. Photon integration via the eve channel (`agent/voice`); phone ↔ student mapping (Clerk user ↔ number); onboarding hands off **inbound-first** — the student texts the number, the agent replies with the briefing.
-2. Nightly pass, split at the tool boundary: a **Convex cron** runs the deterministic precompute (feasible set for tomorrow, pending-change annotations, signals digest) and then **triggers an eve Voice run** per student for selection + composition + send. eve never fans out schedules per user; Convex decides who gets a run and hands it what's true.
-3. Morning push at the student's local time. Never leads with a link or media (deliverability); links out to Face come after the student has replied at least once.
+2. Morning pass, split at the tool boundary: a **Convex cron** runs the deterministic precompute (feasible set for *that day*, pending-change annotations, signals digest) and then **triggers an eve Voice run** per student for selection + composition + send. eve never fans out schedules per user; Convex decides who gets a run and hands it what's true.
+3. Morning push at the student's local morning hour (`morningHourLocal`, default 7am), about the day they are waking into — the plan already excludes the hours that have passed. Never leads with a link or media (deliverability); links out to Face come after the student has replied at least once.
 4. Inbound handling v0: classify message → `state update | plan negotiation | question | noise` → structured, zod-validated → state updates emit Core `changes` (`needs_approval`) and are **confirmed inline in the same exchange** — that confirmation *is* the approval (core.md "Approval channels"). Nothing from chat lands in the web queue.
 5. Nightly pass also surfaces any pending change entering the planning horizon for a one-word confirmation, so the queue drains through conversation.
 6. Voice guidelines v1 as `instructions.md` + skills with good/bad example pairs, plus a first tone eval.
