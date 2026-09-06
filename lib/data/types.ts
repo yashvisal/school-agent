@@ -32,8 +32,8 @@ export type SourceKind =
   | "schedule"
   | "calendar"
 
-/** `changes.origin` — mirrors Core's `sourceKindV` */
-export type ChangeOrigin =
+/** `provenance.source` — mirrors Core's `sourceKindV`: things that state facts */
+export type ProvenanceSource =
   | "canvas"
   | "ical"
   | "syllabus"
@@ -41,6 +41,14 @@ export type ChangeOrigin =
   | "chat"
   | "manual"
   | "schedule"
+
+/**
+ * `changes.origin` — mirrors Core's `originV`: every provenance source, plus
+ * `planner`, which is an origin but never a source. A plan commit asserts no
+ * fact about the world (it only says when work happens), so nothing it writes
+ * carries provenance.
+ */
+export type ChangeOrigin = ProvenanceSource | "planner"
 
 export type DeadlineKind =
   | "homework"
@@ -91,7 +99,7 @@ export type CourseStatus = "active" | "concluded" | "hidden"
 
 /** Every fact carries this. Rendered by the provenance popover. */
 export type Provenance = {
-  source: ChangeOrigin
+  source: ProvenanceSource
   /** the thing in the source this came from: a Canvas id, a page ref, a URL */
   sourceRef: string
   /** 0–1. Structured sources are 1; LLM extraction is whatever it reported.

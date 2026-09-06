@@ -114,6 +114,13 @@ export type Option = {
   remainingWindowsBeforeDue: number
   /** Plain-English facts. The agent weighs these; nothing here is a score. */
   facts: string[]
+  /**
+   * The block already committed for this work on `date` — a task whose
+   * `plannedFor` is this day. It is what the agent told the student this morning
+   * (`commitPlan`), so a follow-up can reference it and a replan can see what it
+   * is replacing. Not a constraint: `fits` still says what is possible.
+   */
+  planned?: { startMin: number; endMin: number }
   pending?: string[]
   signals?: string[]
   /**
@@ -592,6 +599,17 @@ function buildOption(args: BuildArgs): Option {
   const pending = args.pendingAnnotations.map((p) => `pending: ${p.summary}`)
   const signalTexts = args.related.map((s) => s.text)
 
+  // Already committed for this day. `plannedEndMin` is what `commitPlan` writes;
+  // a task planned before that field existed falls back to the effort estimate,
+  // so the block is always a real interval rather than a bare start time.
+  const planned =
+    task?.plannedFor === date && task.plannedStartMin !== undefined
+      ? {
+          startMin: task.plannedStartMin,
+          endMin: task.plannedEndMin ?? task.plannedStartMin + effort.estEffortMin,
+        }
+      : undefined
+
   return {
     taskId: task?._id,
     deadlineId: deadline?._id,
@@ -610,6 +628,7 @@ function buildOption(args: BuildArgs): Option {
     fits,
     remainingWindowsBeforeDue: remaining.count,
     facts,
+    planned,
     pending: pending.length > 0 ? pending : undefined,
     signals: signalTexts.length > 0 ? signalTexts : undefined,
     overdue: overdue ? true : undefined,

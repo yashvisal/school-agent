@@ -102,6 +102,8 @@ export type PlanOption = {
   fits: PlanFit[]
   remainingWindowsBeforeDue: number
   facts: string[]
+  /** What was already committed for this work on `date`, if anything. */
+  planned?: { startMin: number; endMin: number }
   pending?: string[]
   signals?: string[]
   overdue?: boolean
@@ -189,6 +191,43 @@ export async function proposeChange(
   change: VoiceChange,
 ): Promise<{ changeId: string; status: string; tier: string }> {
   return await corePost("/voice/proposeChange", { studentId, change })
+}
+
+/** Minutes from local midnight; `endMin` is exclusive and must be after `startMin`. */
+type PlanBlock = { startMin: number; endMin: number }
+
+/**
+ * A pick carries exactly ONE complete identity — the union is the type, so a
+ * bare `title` with no `courseId` does not compile. Core enforces the same rule
+ * and answers a `400` naming the pick; this is the earlier, cheaper boundary.
+ */
+export type PlanPick =
+  | (PlanBlock & { taskId: string })
+  | (PlanBlock & { deadlineId: string })
+  | (PlanBlock & { title: string; courseId: string })
+
+export type CommittedBlock = {
+  taskId: string
+  deadlineId?: string
+  title: string
+  plannedFor: string
+  plannedStartMin: number
+  plannedEndMin: number
+}
+
+/**
+ * Commit the day's plan (VOICE_TOOLS.md §4b). Core re-verifies every pick
+ * against its own feasible set and refuses the whole commit — a `400`, and this
+ * throws — if any block is not inside a free window for that work. The commit is
+ * authoritative for `date`: anything the agent planned there and did not re-pick
+ * comes back unplanned.
+ */
+export async function commitPlan(
+  studentId: string,
+  date: string,
+  picks: PlanPick[],
+): Promise<{ committed: CommittedBlock[]; unplanned: number }> {
+  return await corePost("/voice/commitPlan", { studentId, date, picks })
 }
 
 export async function recordSignal(

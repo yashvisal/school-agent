@@ -16,6 +16,7 @@ import {
   surfaceV,
   tierV,
 } from "./lib/validators"
+import { formatClock, localDate, localMinutes } from "./lib/time"
 import { loadFeasibleActions } from "./planner"
 import { signalRefsV } from "./signals"
 
@@ -25,6 +26,7 @@ import { signalRefsV } from "./signals"
  *
  *   getFeasibleActions  read the plan   — never the raw tables
  *   proposeChange       write state     — always through `changes`
+ *   commitPlan          write the plan  — the picks it just named, verified
  *   recordSignal        write learning  — `studentSignals`, text as told
  *
  * Nothing else is reachable. These are `internal*` functions: Voice runs outside
@@ -32,9 +34,9 @@ import { signalRefsV } from "./signals"
  * authenticate with `CORE_AGENT_SECRET`. Keeping them internal means the public
  * API surface stays exactly what Face needs and nothing more.
  *
- * `logUsage` below is the fourth route but NOT a planning tool: it is the
- * mandatory per-call cost record (vision §10 cost posture), not a way to see or
- * change the plan. The seam is three tools; this is bookkeeping.
+ * `logUsage` below is a fifth route but NOT a planning tool: it is the mandatory
+ * per-call cost record (vision §10 cost posture), not a way to see or change the
+ * plan. The seam is four tools; this is bookkeeping.
  */
 
 // ---------------------------------------------------------------------------
@@ -91,57 +93,70 @@ export const getFeasibleActions = internalQuery({
     now: v.optional(v.number()),
   },
   returns: planV,
-  handler: async (ctx, args) => {
-    const now = args.now ?? Date.now()
-
-    const run = await ctx.db
-      .query("planRuns")
-      .withIndex("by_student_date", (q) =>
-        q.eq("studentId", args.studentId).eq("date", args.date)
-      )
-      .order("desc")
-      .first()
-
-    const fresh =
-      run !== null &&
-      now - run.computedAt <= PLAN_CACHE_MAX_AGE_MS &&
-      !(await changedSince(ctx, args.studentId, run.computedAt))
-
-    if (run && fresh) {
-      const student = await ctx.db.get("students", args.studentId)
-      if (!student) throw new Error("404: student not found")
-      // Annotated rather than cast: a new required field on `planV` must fail to
-      // compile here, not fail its `returns` validator at runtime (CR 3892156276).
-      const cached: typeof planV.type = {
-        planRunId: run._id,
-        computedAt: run.computedAt,
-        cached: true,
-        timezone: student.timezone,
-        date: run.feasible.date,
-        windows: run.feasible.windows,
-        options: run.feasible.options,
-        pending: run.pendingAnnotations,
-        signalsDigest: run.signalsDigest,
-      }
-      return cached
-    }
-
-    const { student, result } = await loadFeasibleActions(ctx, {
-      studentId: args.studentId,
-      date: args.date,
-      now,
-    })
-    // No `planRunId`: this plan did not come from the stored run, and citing a
-    // snapshot that was not used would misstate its provenance (CR 3892156287).
-    return {
-      planRunId: undefined,
-      computedAt: now,
-      cached: false,
-      timezone: student.timezone,
-      ...result,
-    }
-  },
+  handler: async (ctx, args) => await loadPlan(ctx, args),
 })
+
+/**
+ * The cache-aware plan load, shared by `getFeasibleActions` and `commitPlan`.
+ *
+ * `commitPlan` verifies every pick against the feasible set, and it must be the
+ * SAME set the agent was shown or the verification is theatre: the agent would
+ * be told "9–11 fits" by a cached snapshot and refused by a live recompute.
+ * One function, one cache rule (CLAUDE.md: the tool boundary is the seam).
+ */
+async function loadPlan(
+  ctx: QueryCtx,
+  args: { studentId: Id<"students">; date: string; now?: number }
+): Promise<typeof planV.type> {
+  const now = args.now ?? Date.now()
+
+  const run = await ctx.db
+    .query("planRuns")
+    .withIndex("by_student_date", (q) =>
+      q.eq("studentId", args.studentId).eq("date", args.date)
+    )
+    .order("desc")
+    .first()
+
+  const fresh =
+    run !== null &&
+    now - run.computedAt <= PLAN_CACHE_MAX_AGE_MS &&
+    !(await changedSince(ctx, args.studentId, run.computedAt))
+
+  if (run && fresh) {
+    const student = await ctx.db.get("students", args.studentId)
+    if (!student) throw new Error("404: student not found")
+    // Annotated rather than cast: a new required field on `planV` must fail to
+    // compile here, not fail its `returns` validator at runtime (CR 3892156276).
+    const cached: typeof planV.type = {
+      planRunId: run._id,
+      computedAt: run.computedAt,
+      cached: true,
+      timezone: student.timezone,
+      date: run.feasible.date,
+      windows: run.feasible.windows,
+      options: run.feasible.options,
+      pending: run.pendingAnnotations,
+      signalsDigest: run.signalsDigest,
+    }
+    return cached
+  }
+
+  const { student, result } = await loadFeasibleActions(ctx, {
+    studentId: args.studentId,
+    date: args.date,
+    now,
+  })
+  // No `planRunId`: this plan did not come from the stored run, and citing a
+  // snapshot that was not used would misstate its provenance (CR 3892156287).
+  return {
+    planRunId: undefined,
+    computedAt: now,
+    cached: false,
+    timezone: student.timezone,
+    ...result,
+  }
+}
 
 // ---------------------------------------------------------------------------
 // proposeChange
@@ -208,6 +223,418 @@ export const proposeChange = internalMutation({
       evidence: args.change.evidence,
     })
     return { changeId, status, tier: tierFor(VOICE_ORIGIN, args.change.conflict) }
+  },
+})
+
+// ---------------------------------------------------------------------------
+// commitPlan
+// ---------------------------------------------------------------------------
+
+/**
+ * One block the agent named in the thread. Identified the way the agent saw it:
+ * an existing `taskId`, else the `deadlineId` the work belongs to, else the
+ * `title` + `courseId` of a free-standing task. Times are minutes from local
+ * midnight, and are verified against the feasible set before anything is written.
+ */
+export const planPickV = v.object({
+  taskId: v.optional(v.id("tasks")),
+  deadlineId: v.optional(v.id("deadlines")),
+  title: v.optional(v.string()),
+  courseId: v.optional(v.id("courses")),
+  startMin: v.number(),
+  endMin: v.number(),
+})
+
+/** The morning text names 1–3 things. A "plan" longer than that is a list. */
+export const MAX_PICKS = 3
+
+/**
+ * `origin` is not a caller choice here either. `commitPlan` is the ONLY thing in
+ * Core that emits `planner`, and it does so having just re-verified every pick
+ * against its own feasible set — that verification is what earns the `auto`
+ * tier (`lib/changes.ts`, `AUTHORITATIVE_ORIGINS`). The generic
+ * `/voice/proposeChange` route still forces `chat`, so Voice cannot reach this
+ * origin by asking for it.
+ */
+const PLANNER_ORIGIN = "planner" as const
+
+type Plan = typeof planV.type
+type PlanOption = Plan["options"][number]
+type PlanPick = typeof planPickV.type
+
+const describePick = (pick: PlanPick, option?: PlanOption): string => {
+  const label =
+    option?.title ?? pick.title ?? pick.taskId ?? pick.deadlineId ?? "that block"
+  return `"${label}" ${formatClock(pick.startMin)}–${formatClock(pick.endMin)}`
+}
+
+/**
+ * A pick must carry EXACTLY one complete identity. Reported separately from "no
+ * such option", because they are different mistakes: a malformed pick is a bad
+ * request, and saying it "matches nothing in the feasible set" would send the
+ * reader looking for the wrong bug.
+ *
+ * Both directions matter. Too few is obvious. Too many is worse: `matchOption`
+ * resolves in a fixed order, so a pick carrying a `taskId` AND a `deadlineId`
+ * that disagree would silently plan the task and ignore the deadline — the
+ * agent's own contradiction, resolved by precedence instead of raised. The two
+ * ids are only redundant when they already agree, and then dropping one costs
+ * nothing.
+ */
+function identityProblem(pick: PlanPick): string | null {
+  const variants = [
+    pick.taskId !== undefined,
+    pick.deadlineId !== undefined,
+    pick.title !== undefined || pick.courseId !== undefined,
+  ].filter(Boolean).length
+
+  if (variants > 1) {
+    return "supplies more than one identity — use taskId, or deadlineId, or title + courseId"
+  }
+  if (variants === 0) {
+    return "identifies no work: give a taskId, else a deadlineId, else title + courseId"
+  }
+  if (pick.title !== undefined || pick.courseId !== undefined) {
+    if (!pick.title || !pick.courseId) {
+      return "names work by title without a courseId (or the other way round); free-standing work needs both"
+    }
+  }
+  return null
+}
+
+/**
+ * The option this pick names, or `undefined`. Ids first, because they are
+ * unambiguous; the title match is the fallback for free-standing work, which the
+ * agent may only have a name for.
+ */
+function matchOption(plan: Plan, pick: PlanPick): PlanOption | undefined {
+  if (pick.taskId) return plan.options.find((o) => o.taskId === pick.taskId)
+  if (pick.deadlineId) {
+    return plan.options.find((o) => o.deadlineId === pick.deadlineId)
+  }
+  if (pick.title && pick.courseId) {
+    return plan.options.find(
+      (o) =>
+        o.deadlineId === undefined &&
+        o.title === pick.title &&
+        o.courseId === pick.courseId
+    )
+  }
+  return undefined
+}
+
+/**
+ * Why this block is not committable, or `null`.
+ *
+ * The hard guarantees of §3 are re-established here rather than trusted: the
+ * block must sit inside a free window this option can use — availability minus
+ * class blocks minus the past, exactly as `fits` was derived — and must end by
+ * the due minute on the due day. An `overdue` option offers no window at all.
+ *
+ * It is checked against the window a `fit` points at rather than the fit's own
+ * span, deliberately. A `fit` is the planner's *suggested* slot: it starts at
+ * the head of the window and runs one effort estimate long, so two things in one
+ * afternoon would have to overlap, and a 9pm block in a 9am–10pm window would be
+ * refused for no reason. The window and the due time are what the guarantees are
+ * actually about, and both are enforced exactly.
+ */
+function blockProblem(
+  plan: Plan,
+  option: PlanOption,
+  pick: PlanPick,
+  date: string,
+  timezone: string
+): string | null {
+  if (!Number.isInteger(pick.startMin) || !Number.isInteger(pick.endMin)) {
+    return "has a non-integer time; startMin and endMin are whole minutes from local midnight"
+  }
+  if (pick.startMin < 0 || pick.endMin > 1440 || pick.endMin <= pick.startMin) {
+    return "is not a real block on that day"
+  }
+  if (option.overdue || option.fits.length === 0) {
+    return `has no free window on ${date}`
+  }
+
+  const cutoffMin =
+    option.dueAt !== undefined && localDate(option.dueAt, timezone) === date
+      ? localMinutes(option.dueAt, timezone)
+      : 1440
+
+  for (const fit of option.fits) {
+    const window = plan.windows[fit.windowIndex]
+    if (!window) continue
+    const latest = Math.min(window.endMin, cutoffMin)
+    if (pick.startMin >= window.startMin && pick.endMin <= latest) return null
+  }
+  return `is not inside a free window for that work on ${date}`
+}
+
+/**
+ * The change-feed reason for a task's new block.
+ *
+ * A task moving BETWEEN days is the retention moment this product exists for —
+ * "didn't do it friday, do it saturday" — so it is allowed, in either direction
+ * (yesterday's slipped work pulled forward, tomorrow's work pulled into today).
+ * What it must not be is silent: the day it came off is named, so the feed shows
+ * a move rather than a task that mysteriously appeared on a new date. The
+ * `before` on the change carries that day's block as well.
+ */
+function reasonFor(previous: string | undefined, date: string): string {
+  if (!previous) return `planned in the thread for ${date}`
+  if (previous === date) return `replanned in the thread for ${date}`
+  return `replanned from ${previous} in the thread for ${date}`
+}
+
+/**
+ * Commit the plan the agent just told the student — the missing half of the
+ * seam (decided 2026-09-05).
+ *
+ * Until this existed, the morning text was the only record of the day: no
+ * `tasks` row, an empty Today panel, a check-in with nothing to ask about, and a
+ * replan that could not see what it was replacing. The agent choosing among
+ * options Core computed *is* the plan, so it applies immediately at origin
+ * `planner` rather than waiting for an approval nobody would give.
+ *
+ * Two properties make that safe:
+ *
+ * 1. **Every pick is verified against Core's own feasible set** before anything
+ *    is written, and the whole commit is refused if any of them fails — never a
+ *    class block, never past the due time, never work that is not in the set.
+ * 2. **A commit is authoritative for its date.** Agent-created tasks previously
+ *    planned for that day and not re-picked come back UNPLANNED — not skipped;
+ *    the student never said no. Student-created tasks are never touched.
+ *
+ * Idempotent: re-committing the same picks compares before to after and writes
+ * no second change.
+ */
+export const commitPlan = internalMutation({
+  args: {
+    studentId: v.id("students"),
+    date: v.string(),
+    /** The run the plan was read from, for traceability. Verified to be theirs. */
+    planRunId: v.optional(v.id("planRuns")),
+    picks: v.array(planPickV),
+    now: v.optional(v.number()),
+  },
+  returns: v.object({
+    committed: v.array(
+      v.object({
+        taskId: v.id("tasks"),
+        deadlineId: v.optional(v.id("deadlines")),
+        title: v.string(),
+        plannedFor: v.string(),
+        plannedStartMin: v.number(),
+        plannedEndMin: v.number(),
+      })
+    ),
+    unplanned: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    const student = await ctx.db.get("students", args.studentId)
+    if (!student) throw new Error("404: student not found")
+    if (args.picks.length < 1 || args.picks.length > MAX_PICKS) {
+      throw new Error(
+        `400: commitPlan takes 1-${MAX_PICKS} picks; got ${args.picks.length}`
+      )
+    }
+    if (args.planRunId) {
+      const run = await ctx.db.get("planRuns", args.planRunId)
+      if (!run || run.studentId !== args.studentId) {
+        throw new Error("400: planRunId is not a run for this student")
+      }
+      if (run.date !== args.date) {
+        throw new Error(`400: planRunId is the run for ${run.date}, not ${args.date}`)
+      }
+    }
+
+    // The same cache rule `getFeasibleActions` serves the agent from, so the set
+    // being verified against is the set the agent was shown.
+    const plan = await loadPlan(ctx, {
+      studentId: args.studentId,
+      date: args.date,
+      now: args.now,
+    })
+
+    // Verify EVERYTHING before writing anything. A half-committed day is worse
+    // than a refused one: the student was told a plan, and the plan is one thing.
+    const verified: { pick: PlanPick; option: PlanOption }[] = []
+    const named = new Set<string>()
+    for (const pick of args.picks) {
+      const malformed = identityProblem(pick)
+      if (malformed) throw new Error(`400: pick ${describePick(pick)} ${malformed}`)
+
+      const option = matchOption(plan, pick)
+      if (!option) {
+        throw new Error(
+          `400: pick ${describePick(pick)} matches nothing in the feasible set for ${args.date}`
+        )
+      }
+      const key =
+        option.taskId ?? option.deadlineId ?? `${option.courseId ?? ""}:${option.title}`
+      if (named.has(key)) {
+        throw new Error(`400: pick ${describePick(pick, option)} names the same work twice`)
+      }
+      named.add(key)
+      const problem = blockProblem(plan, option, pick, args.date, student.timezone)
+      if (problem) {
+        throw new Error(`400: pick ${describePick(pick, option)} ${problem}`)
+      }
+      // A day is a sequence, not a set. Two blocks claiming the same minutes is
+      // not a plan the student can act on — and the agent said them one after
+      // another, so an overlap means it lost track of the clock, not that it
+      // meant to double-book.
+      for (const earlier of verified) {
+        const from = Math.max(earlier.pick.startMin, pick.startMin)
+        const to = Math.min(earlier.pick.endMin, pick.endMin)
+        if (from < to) {
+          throw new Error(
+            `400: picks ${describePick(earlier.pick, earlier.option)} and ` +
+              `${describePick(pick, option)} overlap ` +
+              `(${formatClock(from)}–${formatClock(to)})`
+          )
+        }
+      }
+      verified.push({ pick, option })
+    }
+
+    const committed: {
+      taskId: Id<"tasks">
+      deadlineId?: Id<"deadlines">
+      title: string
+      plannedFor: string
+      plannedStartMin: number
+      plannedEndMin: number
+    }[] = []
+    const kept = new Set<string>()
+
+    for (const { pick, option } of verified) {
+      const block = {
+        plannedFor: args.date,
+        plannedStartMin: pick.startMin,
+        plannedEndMin: pick.endMin,
+        estEffortMin: option.estEffortMin,
+        estEffortConfidence: option.estEffortConfidence,
+      }
+
+      if (option.taskId) {
+        const taskId = option.taskId as Id<"tasks">
+        const task = await ctx.db.get("tasks", taskId)
+        // The option came out of this student's own plan, so this cannot happen
+        // through the tool; it is the same tenancy floor `applyChange` holds.
+        if (!task || task.studentId !== args.studentId) {
+          throw new Error("403: entity does not belong to student")
+        }
+        kept.add(taskId)
+
+        const unchanged =
+          task.plannedFor === block.plannedFor &&
+          task.plannedStartMin === block.plannedStartMin &&
+          task.plannedEndMin === block.plannedEndMin &&
+          task.estEffortMin === block.estEffortMin &&
+          task.estEffortConfidence === block.estEffortConfidence
+        if (!unchanged) {
+          await proposeChangeInternal(ctx, {
+            studentId: args.studentId,
+            courseId: task.courseId,
+            kind: "task_updated",
+            entity: { table: "tasks", id: taskId },
+            before: {
+              plannedFor: task.plannedFor ?? null,
+              plannedStartMin: task.plannedStartMin ?? null,
+              plannedEndMin: task.plannedEndMin ?? null,
+            },
+            after: block,
+            origin: PLANNER_ORIGIN,
+            planRunId: args.planRunId,
+            reason: reasonFor(task.plannedFor, args.date),
+          })
+        }
+        committed.push({
+          taskId,
+          deadlineId: task.deadlineId,
+          title: task.title,
+          plannedFor: args.date,
+          plannedStartMin: pick.startMin,
+          plannedEndMin: pick.endMin,
+        })
+        continue
+      }
+
+      // No task yet: the option is a deadline the student has never scheduled.
+      const { changeId } = await proposeChangeInternal(ctx, {
+        studentId: args.studentId,
+        courseId: option.courseId as Id<"courses"> | undefined,
+        kind: "task_created",
+        entity: { table: "tasks" },
+        after: {
+          deadlineId: option.deadlineId,
+          courseId: option.courseId,
+          title: option.title,
+          type: "do",
+          status: "todo",
+          createdBy: "agent",
+          ...block,
+        },
+        origin: PLANNER_ORIGIN,
+        planRunId: args.planRunId,
+        reason: `planned in the thread for ${args.date}`,
+      })
+      const change = await ctx.db.get("changes", changeId)
+      const taskId = change?.entity.id as Id<"tasks"> | undefined
+      if (!taskId) throw new Error("500: task_created did not produce a task")
+      kept.add(taskId)
+      committed.push({
+        taskId,
+        deadlineId: option.deadlineId as Id<"deadlines"> | undefined,
+        title: option.title,
+        plannedFor: args.date,
+        plannedStartMin: pick.startMin,
+        plannedEndMin: pick.endMin,
+      })
+    }
+
+    // Authoritative for the date: what the agent planned here and dropped there
+    // stops being planned. Only work the agent itself put on the day, and only
+    // while it is still open — a done or skipped task's planned day is a record
+    // of what happened, not a plan to revise.
+    //
+    // Read through `by_student_plannedFor`, so this is EXACTLY the tasks on that
+    // day rather than a capped scan of the student's tasks filtered afterwards:
+    // a student with a semester of history would have had a dropped task fall
+    // behind the cap and silently keep its stale block. One day's plan is a
+    // handful of rows by construction, so it collects.
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_student_plannedFor", (q) =>
+        q.eq("studentId", args.studentId).eq("plannedFor", args.date)
+      )
+      .collect()
+
+    let unplanned = 0
+    for (const task of tasks) {
+      if (task.createdBy !== "agent") continue
+      if (task.status !== "todo" && task.status !== "in_progress") continue
+      if (kept.has(task._id)) continue
+      await proposeChangeInternal(ctx, {
+        studentId: args.studentId,
+        courseId: task.courseId,
+        kind: "task_updated",
+        entity: { table: "tasks", id: task._id },
+        before: {
+          plannedFor: task.plannedFor,
+          plannedStartMin: task.plannedStartMin ?? null,
+          plannedEndMin: task.plannedEndMin ?? null,
+        },
+        // `null` is "unset this field" on apply — unplanned, not skipped.
+        after: { plannedFor: null, plannedStartMin: null, plannedEndMin: null },
+        origin: PLANNER_ORIGIN,
+        planRunId: args.planRunId,
+        reason: `unplanned for ${args.date} — replaced by the plan committed in the thread`,
+      })
+      unplanned++
+    }
+
+    return { committed, unplanned }
   },
 })
 

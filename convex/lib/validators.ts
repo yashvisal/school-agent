@@ -28,8 +28,17 @@ export const sourceKindV = v.union(
   v.literal("schedule")
 )
 
-/** Origin of a change — same set as `sourceKindV`; the two-tier rule keys off it. */
-export const originV = sourceKindV
+/**
+ * Origin of a change — every `sourceKindV`, plus `planner`.
+ *
+ * The two-tier rule keys off this field, so it is a *provenance claim*: what the
+ * change says about where its content came from. `planner` is the one origin
+ * that claims nothing about the world — it means "the agent picked among options
+ * Core itself computed", which is why it is authoritative (see `lib/changes.ts`,
+ * `AUTHORITATIVE_ORIGINS`). It is deliberately NOT a `sourceKindV`: nothing the
+ * planner writes carries provenance, because it asserts no fact.
+ */
+export const originV = v.union(sourceKindV, v.literal("planner"))
 
 export const provenanceV = v.object({
   source: sourceKindV,
@@ -370,6 +379,8 @@ export const taskFields = {
   /** "YYYY-MM-DD" in the student's timezone. */
   plannedFor: v.optional(v.string()),
   plannedStartMin: v.optional(v.number()),
+  /** End of the planned block, minutes from local midnight. Set by a plan commit. */
+  plannedEndMin: v.optional(v.number()),
   estEffortMin: v.optional(v.number()),
   estEffortConfidence: v.optional(effortConfidenceV),
   actualEffortMin: v.optional(v.number()),
@@ -387,6 +398,12 @@ export const changeFields = {
   tier: tierV,
   status: changeStatusV,
   snapshotIds: v.array(v.id("snapshots")),
+  /**
+   * The plan run this change was committed against, for `planner`-origin
+   * changes. Kept off `snapshotIds`, which are *source* snapshots (what Canvas
+   * or a syllabus said); a plan run is Core's own computation, not a source.
+   */
+  planRunId: v.optional(v.id("planRuns")),
   reason: v.optional(v.string()),
   conflict: v.optional(v.boolean()),
   /**
@@ -541,6 +558,11 @@ export const optionV = v.object({
   fits: v.array(fitV),
   remainingWindowsBeforeDue: v.number(),
   facts: v.array(v.string()),
+  /**
+   * Set when a task for this option is already planned on `date` — what the
+   * agent committed for this day, so a follow-up or a replan can see it.
+   */
+  planned: v.optional(v.object({ startMin: v.number(), endMin: v.number() })),
   pending: v.optional(v.array(v.string())),
   signals: v.optional(v.array(v.string())),
   /**

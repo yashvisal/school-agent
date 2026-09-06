@@ -193,7 +193,7 @@ Side benefit: "why this?" gets a true, legible answer ("worth 25%, due Thursday,
 
 **Division of labor, stated once: Convex decides what's true and what's possible; eve agents decide what to say and do within that, and everything they learn or produce flows back through tools.** Same rule for Voice and the workspace agent — one architecture, two agents.
 
-The deterministic seam (above) was never about runtime location; it is about the **tool boundary**. The Voice agent can only see the plan through `getFeasibleActions` and can only mutate state through `proposeChange` (and record what it learns through `recordSignal`). It freestyles composition within what tools return — exactly the seam as designed. Convex keeps the planner, the diff engine, the changes pipeline, signals, and usage logging; eve gets the channel, the loop, and the talking. Voice guidelines become `instructions.md` plus skills — checked-in markdown, which is precisely how we wanted to manage them.
+The deterministic seam (above) was never about runtime location; it is about the **tool boundary**. The Voice agent can only see the plan through `getFeasibleActions` and can only mutate state through `proposeChange` and `commitPlan` (and record what it learns through `recordSignal`). It freestyles composition within what tools return — exactly the seam as designed. Convex keeps the planner, the diff engine, the changes pipeline, signals, and usage logging; eve gets the channel, the loop, and the talking. Voice guidelines become `instructions.md` plus skills — checked-in markdown, which is precisely how we wanted to manage them.
 
 Agents run on [eve](https://github.com/vercel/eve) (Vercel's open-source agent framework, Apache-2.0, built on the AI SDK; public beta since June 2026). It gives us, natively: sandboxes, connections (managed auth), cron schedules, skills as markdown, subagents, evals, OTel tracing with replayable runs, human-in-the-loop approvals, an official Photon iMessage channel, and a first-class stream into our Next.js harness. It is a v0-era dependency (0.x, fast-moving, open P0s) — **pin every version**, and keep tools and skills runtime-portable so a change of runtime is wiring, not logic.
 
@@ -212,7 +212,8 @@ app/ components/ lib/   Face: Next.js harness + shared schemas
 agent/                  eve project — both agents, per eve convention
   voice/                planning agent: Photon channel, morning schedule,
                         instructions.md + voice-guideline skills,
-                        tools → convex (getFeasibleActions, proposeChange, recordSignal)
+                        tools → convex (getFeasibleActions, proposeChange,
+                        commitPlan, recordSignal)
   workspace/            M3: per-session sandbox, hydrate tool, component streaming
 ```
 

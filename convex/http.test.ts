@@ -74,6 +74,7 @@ const post = (
 const ROUTES = [
   "/voice/getFeasibleActions",
   "/voice/proposeChange",
+  "/voice/commitPlan",
   "/voice/recordSignal",
   "/voice/logUsage",
   "/voice/resolveStudent",
@@ -433,6 +434,168 @@ describe("proposeChange", () => {
     expect(response.status).toBe(400)
     const deadlines = await t.run(async (ctx) => ctx.db.query("deadlines").take(10))
     expect(deadlines).toHaveLength(0)
+  })
+
+  test("origin cannot be spoofed — a change claiming `planner` is still chat", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    const response = await post(t, "/voice/proposeChange", {
+      studentId: seeded.studentId,
+      change: {
+        courseId: seeded.courseId,
+        kind: "task_created",
+        entity: { table: "tasks" },
+        // `planner` is an `auto`-tier origin; the route must not honour it, or
+        // Voice could apply anything it liked without an approval.
+        origin: "planner",
+        after: { title: "invented", type: "do", status: "todo", plannedFor: DATE },
+      },
+    })
+
+    // `voiceChangeV` has no `origin` field at all, so the claim is rejected by
+    // the validator before the mutation runs. Even if it were dropped silently,
+    // `proposeChange` forces `chat` — belt and braces, one property: Voice can
+    // never reach the `auto` tier through this route.
+    expect(response.status).toBe(400)
+    const changes = await t.run(async (ctx) => ctx.db.query("changes").take(10))
+    expect(changes).toHaveLength(0)
+    const tasks = await t.run(async (ctx) => ctx.db.query("tasks").take(10))
+    expect(tasks).toHaveLength(0)
+  })
+
+  test("a task change through proposeChange is chat-origin and stays pending", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    const response = await post(t, "/voice/proposeChange", {
+      studentId: seeded.studentId,
+      change: {
+        courseId: seeded.courseId,
+        kind: "task_created",
+        entity: { table: "tasks" },
+        after: { title: "invented", type: "do", status: "todo", plannedFor: DATE },
+      },
+    })
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      status: "pending",
+      tier: "needs_approval",
+    })
+    const changes = await t.run(async (ctx) => ctx.db.query("changes").take(10))
+    expect(changes[0].origin).toBe("chat")
+    const tasks = await t.run(async (ctx) => ctx.db.query("tasks").take(10))
+    expect(tasks).toHaveLength(0)
+  })
+})
+
+describe("commitPlan", () => {
+  const seedDeadline = (t: ReturnType<typeof setupTest>, seeded: Seeded) =>
+    t.run(async (ctx) =>
+      ctx.db.insert("deadlines", {
+        studentId: seeded.studentId,
+        courseId: seeded.courseId,
+        title: "Pset 3",
+        kind: "homework",
+        dueAt: at("2026-09-17", 23 * 60 + 59),
+        submissionStatus: "unsubmitted",
+        externalIds: {},
+        provenance: { source: "canvas", sourceRef: "a/1", confidence: 1 },
+        status: "active",
+      })
+    )
+
+  test("commits the day's plan and applies it immediately", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    const deadlineId = await seedDeadline(t, seeded)
+
+    const response = await post(t, "/voice/commitPlan", {
+      studentId: seeded.studentId,
+      date: DATE,
+      now: at(DATE, 6 * 60),
+      picks: [{ deadlineId, startMin: 840, endMin: 960 }],
+    })
+
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as {
+      ok: boolean
+      unplanned: number
+      committed: { title: string; plannedFor: string; plannedStartMin: number }[]
+    }
+    expect(body.ok).toBe(true)
+    expect(body.unplanned).toBe(0)
+    expect(body.committed).toMatchObject([
+      { title: "Pset 3", plannedFor: DATE, plannedStartMin: 840 },
+    ])
+
+    const tasks = await t.run(async (ctx) => ctx.db.query("tasks").take(10))
+    expect(tasks).toMatchObject([{ plannedFor: DATE, createdBy: "agent" }])
+    const changes = await t.run(async (ctx) => ctx.db.query("changes").take(10))
+    expect(changes).toMatchObject([
+      { origin: "planner", tier: "auto", status: "applied" },
+    ])
+  })
+
+  test("a pick outside the day's free windows is a 400 naming it, and writes nothing", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    const deadlineId = await seedDeadline(t, seeded)
+
+    const response = await post(t, "/voice/commitPlan", {
+      studentId: seeded.studentId,
+      date: DATE,
+      now: at(DATE, 6 * 60),
+      picks: [{ deadlineId, startMin: 1300, endMin: 1380 }],
+    })
+
+    expect(response.status).toBe(400)
+    const body = (await response.json()) as { ok: boolean; error: string }
+    expect(body.ok).toBe(false)
+    expect(body.error).toMatch(/Pset 3/)
+    expect(body.error).toMatch(/free window/)
+
+    const tasks = await t.run(async (ctx) => ctx.db.query("tasks").take(10))
+    expect(tasks).toHaveLength(0)
+  })
+
+  test("a missing date is a 400", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    const response = await post(t, "/voice/commitPlan", {
+      studentId: seeded.studentId,
+      picks: [],
+    })
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toMatchObject({
+      error: "date is required, as YYYY-MM-DD",
+    })
+  })
+
+  test("picks that are not an array is a 400", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    const response = await post(t, "/voice/commitPlan", {
+      studentId: seeded.studentId,
+      date: DATE,
+      picks: { deadlineId: "x" },
+    })
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toMatchObject({
+      error: "picks must be an array",
+    })
+  })
+
+  test("a malformed id in a pick is a 400 from the validator", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    const response = await post(t, "/voice/commitPlan", {
+      studentId: seeded.studentId,
+      date: DATE,
+      picks: [{ deadlineId: "not-an-id", startMin: 540, endMin: 600 }],
+    })
+    expect(response.status).toBe(400)
+    const changes = await t.run(async (ctx) => ctx.db.query("changes").take(10))
+    expect(changes).toHaveLength(0)
   })
 })
 

@@ -9,6 +9,7 @@ import type {
   changeStatusV,
   originV,
   resolvedViaV,
+  sourceKindV,
 } from "./validators"
 
 /**
@@ -41,6 +42,8 @@ export type ProposeChangeInput = {
   after?: unknown
   origin: ChangeOrigin
   snapshotIds?: Id<"snapshots">[]
+  /** The plan run a `planner`-origin commit was verified against. */
+  planRunId?: Id<"planRuns">
   reason?: string
   conflict?: boolean
   /** One extraction run's id, so the queue can approve a whole parse at once. */
@@ -56,10 +59,25 @@ export type ProposeChangeResult = {
   status: ChangeStatus
 }
 
-/** Sources trusted enough to apply without asking. */
+/**
+ * Origins trusted enough to apply without asking.
+ *
+ * Canvas and iCal are here because they are the systems of record: a structured
+ * source with no conflict is not an interpretation of anything.
+ *
+ * `planner` is here for a different reason (decided 2026-09-05). A plan commit
+ * is the agent choosing among options Core itself computed — it is the plan, not
+ * an interpretation of something a student said. The two-tier rule keys off what
+ * a change *claims about the world*, and a planner commit claims nothing: it
+ * says only "put this task in this window", and Core verifies every pick against
+ * its own feasible set before applying (`internal.voice.commitPlan`). There is
+ * no fact to be wrong about, so there is nothing to approve. Only `commitPlan`
+ * emits this origin; the generic Voice route forces `chat` (see `convex/voice.ts`).
+ */
 const AUTHORITATIVE_ORIGINS: ReadonlySet<ChangeOrigin> = new Set<ChangeOrigin>([
   "canvas",
   "ical",
+  "planner",
 ])
 
 export function tierFor(
@@ -155,6 +173,7 @@ export async function proposeChangeInternal(
     tier,
     status,
     snapshotIds: input.snapshotIds ?? [],
+    planRunId: input.planRunId,
     reason: input.reason,
     conflict: input.conflict,
     batchId: input.batchId,
@@ -359,11 +378,40 @@ const TASK_KEYS = [
   "status",
   "plannedFor",
   "plannedStartMin",
+  "plannedEndMin",
   "estEffortMin",
   "estEffortConfidence",
   "actualEffortMin",
   "createdBy",
 ] as const
+
+/**
+ * Task fields a change may *clear*. A plan commit is authoritative for its date
+ * (`commitPlan`), so an agent task it dropped must come back UNPLANNED — not
+ * skipped, since the student never said no — and that means really removing the
+ * planned day and window rather than leaving yesterday's block on the row.
+ * Convex values cannot be `undefined`, so a cleared field arrives as `null`.
+ */
+const CLEARABLE_TASK_KEYS: ReadonlySet<string> = new Set([
+  "plannedFor",
+  "plannedStartMin",
+  "plannedEndMin",
+])
+
+/** The task patch, with `null` read as "unset this field". */
+function pickTask(after: Bag): Bag {
+  const out: Bag = {}
+  for (const key of TASK_KEYS) {
+    const value = after[key]
+    if (value === undefined) continue
+    if (value === null && CLEARABLE_TASK_KEYS.has(key)) {
+      out[key] = undefined // `patch` with an explicit undefined removes the field
+      continue
+    }
+    out[key] = value
+  }
+  return out
+}
 
 /**
  * The student-row fields a change may write. `inboundCount` and
@@ -408,10 +456,20 @@ const CALLER_ASSERTED_ORIGINS: ReadonlySet<ChangeOrigin> = new Set<ChangeOrigin>
   "manual",
 ])
 
+/**
+ * `changes.origin` is a superset of `provenance.source`: `planner` is an origin
+ * but not a source, because a plan commit asserts no fact about the world. It
+ * only ever writes `tasks`, which carry no provenance, so this mapping is never
+ * actually reached for it — it exists so the shared fallback stays total.
+ */
+function provenanceSource(origin: ChangeOrigin): Infer<typeof sourceKindV> {
+  return origin === "planner" ? "chat" : origin
+}
+
 function fallbackProvenance(change: Doc<"changes">) {
   return {
     // `reason` is student-facing prose, not a source reference (CR 3892156165).
-    source: change.origin,
+    source: provenanceSource(change.origin),
     sourceRef: change._id,
     // Confidence is a SOURCE fact: structured sources assert 1; an extraction
     // passes its own number through `after.provenance`. Where neither exists it
@@ -681,7 +739,7 @@ export async function applyChange(
           change.studentId
         )
         if (existing) {
-          await ctx.db.patch("tasks", existing._id, pick(after, TASK_KEYS))
+          await ctx.db.patch("tasks", existing._id, pickTask(after))
           return existing._id
         }
       }
@@ -694,6 +752,7 @@ export async function applyChange(
         status: (after.status as Doc<"tasks">["status"]) ?? "todo",
         plannedFor: after.plannedFor as string | undefined,
         plannedStartMin: after.plannedStartMin as number | undefined,
+        plannedEndMin: after.plannedEndMin as number | undefined,
         estEffortMin: after.estEffortMin as number | undefined,
         estEffortConfidence:
           after.estEffortConfidence as Doc<"tasks">["estEffortConfidence"],
@@ -708,7 +767,7 @@ export async function applyChange(
       if (!id) return undefined
       const doc = await loadOwned(ctx, "tasks", id, change.studentId)
       if (!doc) return undefined
-      await ctx.db.patch("tasks", id, pick(after, TASK_KEYS))
+      await ctx.db.patch("tasks", id, pickTask(after))
       return id
     }
 
@@ -752,7 +811,7 @@ export async function applyChange(
         case "tasks": {
           const id = change.entity.id as Id<"tasks">
           if (!(await loadOwned(ctx, "tasks", id, change.studentId))) return undefined
-          await ctx.db.patch("tasks", id, pick(after, TASK_KEYS))
+          await ctx.db.patch("tasks", id, pickTask(after))
           return id
         }
         case "students": {
