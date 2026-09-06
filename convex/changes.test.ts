@@ -752,7 +752,7 @@ describe("tenancy — a change may only ever touch its own student", () => {
         studentId,
         kind: "chat_decision",
         entity: { table: "students", id: other.studentId },
-        after: { nightlyHourLocal: 23 },
+        after: { morningHourLocal: 23 },
         origin: "chat",
         confirmedInline: true,
       evidence: { quotedReply: "yeah" },
@@ -760,7 +760,7 @@ describe("tenancy — a change may only ever touch its own student", () => {
     ).rejects.toThrow(/403/)
 
     const them = await t.run((ctx) => ctx.db.get("students", other.studentId))
-    expect(them?.nightlyHourLocal).toBeUndefined()
+    expect(them?.morningHourLocal).toBeUndefined()
   })
 
   test("a chat change reaches the schedule fields and nothing else", async () => {
@@ -773,7 +773,7 @@ describe("tenancy — a change may only ever touch its own student", () => {
       entity: { table: "students", id: studentId },
       after: {
         // allowed
-        nightlyHourLocal: 6,
+        morningHourLocal: 6,
         semesterEnd: "2026-12-18",
         classBlocks: [{ dayOfWeek: 1, startMin: 600, endMin: 675 }],
         // identity and routing — an interpreted sentence must not move these
@@ -788,7 +788,7 @@ describe("tenancy — a change may only ever touch its own student", () => {
     })
 
     const student = await t.run((ctx) => ctx.db.get("students", studentId))
-    expect(student?.nightlyHourLocal).toBe(6)
+    expect(student?.morningHourLocal).toBe(6)
     expect(student?.semesterEnd).toBe("2026-12-18")
     expect(student?.classBlocks).toHaveLength(1)
     expect(student?.phone).toBeUndefined()
