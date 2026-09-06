@@ -129,10 +129,11 @@ async function spectrum(
       ...(init ? { "content-type": "application/json" } : {}),
     },
     body: init ? JSON.stringify(init.body) : undefined,
-    // Whichever runs out first: this call's own patience or the route's.
-    signal: AbortSignal.timeout(
-      Math.min(SPECTRUM_TIMEOUT_MS, Math.max(budget.remaining(), MIN_CALL_MS)),
-    ),
+    // Whichever runs out first: this call's own patience or the route's. Never
+    // clamped upwards — a floor here would hand an already-spent budget another
+    // `MIN_CALL_MS` and put the answer back outside Core's window. Callers
+    // check `remaining()` before spending it, so this is positive.
+    signal: AbortSignal.timeout(Math.min(SPECTRUM_TIMEOUT_MS, budget.remaining())),
   })
   const text = await response.text()
   let json: unknown = null
@@ -201,6 +202,13 @@ async function findUser(
   return { ok: true }
 }
 
+/**
+ * The 502 for running out of clock, in one wording: Core stores this string as
+ * the registration's `error`, and one deadline should read as one reason
+ * wherever in the route it was hit.
+ */
+const outOfTime = () => Response.json({ error: "lookup timed out" }, { status: 502 })
+
 /** The 502 a failed Spectrum call becomes. */
 const spectrumFailed = (what: string, status: number, text: string) =>
   Response.json(
@@ -245,7 +253,7 @@ export default defineChannel({
             // Photon already holds. Core records `failed` and the next save
             // retries with a fresh budget.
             console.error("[voice/contact] lookup timed out", { to: last4(phone) })
-            return Response.json({ error: "lookup timed out" }, { status: 502 })
+            return outOfTime()
           }
           console.error("[voice/contact] lookup failed", {
             to: last4(phone),
@@ -259,6 +267,17 @@ export default defineChannel({
             { status: "already_registered", userId: existing.userId },
             { status: 200 },
           )
+        }
+
+        // The lookup can finish with too little left to create in. Starting the
+        // POST anyway would run past the deadline Core is timing us against,
+        // and a create that lands after Core gave up leaves the two ends
+        // disagreeing about the number for a whole retry cycle.
+        if (budget.remaining() < MIN_CALL_MS) {
+          console.error("[voice/contact] no budget left to register", {
+            to: last4(phone),
+          })
+          return outOfTime()
         }
 
         const created = await spectrum(creds, "/users/", budget, {
@@ -275,6 +294,12 @@ export default defineChannel({
           // 409 we cannot corroborate stays a 502, so nothing ever tells Core a
           // number is reachable on the strength of an error code alone.
           if (created.status === 409) {
+            if (budget.remaining() < MIN_CALL_MS) {
+              console.error("[voice/contact] no budget left to confirm a 409", {
+                to: last4(phone),
+              })
+              return outOfTime()
+            }
             const raced = await findUser(creds, phone, budget)
             if (raced.ok && raced.userId) {
               return Response.json(
