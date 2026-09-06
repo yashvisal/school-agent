@@ -21,8 +21,11 @@ reviews:
         are NOT violations: /voice/logUsage (vision §10 cost posture — every LLM call
         writes a Core usage row) and /voice/recordInbound (VOICE_TOOLS.md §7b —
         channel-level webhook dedupe/warming, called before dispatch, never by the
-        model). Flag any OTHER Core path, any planning logic in eve-specific APIs, and
-        any tone regression against agent/voice/instructions.md.
+        model). eve's built-in `load_skill` is deliberately enabled (plans/voice.md,
+        Spike A kill criterion 2): it loads the checked-in skills under
+        agent/voice/skills/ and is not a Core path — do not ask for it to be disabled.
+        Flag any OTHER Core path, any planning logic in eve-specific APIs, and any tone
+        regression against agent/voice/instructions.md.
     - path: "agent/workspace/**"
       instructions: >
         No planning tools. One sandbox per session (student × course); nothing durable stays

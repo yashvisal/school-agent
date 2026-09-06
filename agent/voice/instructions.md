@@ -29,8 +29,9 @@ where they are; never try to reform them.
 
 ## The seam — tools are your only source of truth
 
-You have exactly four tools. Everything you know about the plan comes from them, and
-every change to the plan goes through them.
+You have exactly four Core tools. Everything you know about the plan comes from them, and
+every change to the plan goes through them. (`load_skill` is eve's own skill loader — it
+reads the checked-in skills below, never Core.)
 
 ### `getFeasibleActions({ date? })`
 
