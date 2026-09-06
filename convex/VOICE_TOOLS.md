@@ -1,7 +1,7 @@
 # Voice ↔ Core: the tool contract
 
 > **This file is the seam.** Voice sees the plan only through `getFeasibleActions`,
-> mutates only through `proposeChange`, and learns only through `recordSignal`
+> mutates only through `proposeChange` and `commitPlan`, and learns only through `recordSignal`
 > (vision §10, core.md "What Core hands to Voice and Face"). Nothing else in Core
 > is reachable from an agent. Change a route here and update this file in the same
 > PR — `agent/voice/` is written against this document, not against the source.
@@ -201,9 +201,18 @@ free-standing task.
 | `fits` | `{ windowIndex, startMin, endMin }[]` | Slots on `date` this work could occupy. `windowIndex` indexes `windows`. |
 | `remainingWindowsBeforeDue` | number | Free windows from `date` through the due date, inclusive. |
 | `facts` | string[] | Plain English. **These are what you weigh.** |
+| `planned` | `{ startMin, endMin }`? | The block already committed for this work on `date`. See §4b. |
 | `pending` | string[]? | Unconfirmed changes touching this item. See §6. |
 | `signals` | string[]? | Signal texts referencing this course/deadline/task. |
 | `overdue` | true? | Past due and still not handed in. See below. |
+
+### `planned`
+
+Present on an option whose task is already scheduled on `date` — i.e. one you
+committed with `commitPlan` (§4b). It is what the student was told this morning,
+so you can reference it in a follow-up ("chem's still 2–4") and a replan can see
+exactly what it is replacing. It is not a constraint: `fits` still says what is
+possible, and a new commit for that date overwrites it.
 
 ### `overdue`
 
@@ -250,8 +259,10 @@ so; do not invent a window.
 
 ## 4. `POST /voice/proposeChange` — *write state*
 
-The only mutation path. Everything lands in the `changes` table and is tiered
-there; you never write a deadline, task, or course directly.
+The mutation path for anything you learned. Everything lands in the `changes`
+table and is tiered there; you never write a deadline, task, or course directly.
+(The *plan* — when work happens — goes through `commitPlan`, §4b. Both write
+`changes`; nothing else does.)
 
 **Request**
 
@@ -288,8 +299,10 @@ there; you never write a deadline, task, or course directly.
 construction — it was interpreted from a message, and the route will reject a
 payload that tries to say otherwise. Two consequences worth knowing:
 
-- **A Voice change is never `tier: "auto"`.** It is `needs_approval`, always,
-  and reaches student state only through `confirmedInline` or a web tap.
+- **A change proposed here is never `tier: "auto"`.** It is `needs_approval`,
+  always, and reaches student state only through `confirmedInline` or a web tap.
+  The `planner` origin exists (§4b) but is not reachable from this route: only
+  `commitPlan` emits it, and only after re-verifying the picks itself.
 - **You cannot set `after.provenance`.** The source claim is replaced with
   `{ source: "chat", sourceRef: <changeId> }` on apply, so a fact you heard can
   never be recorded as a fact Canvas stated. The one thing you may assert is a
@@ -353,6 +366,123 @@ contestable by the student. Always pass the real id when the channel showed one.
 A `conflict: true` change is never auto-applied. (Nothing from Voice ever is;
 `conflict` matters for the adapters, and marking it tells the feed *why* the
 change is waiting.)
+
+---
+
+## 4b. `POST /voice/commitPlan` — *write the plan you just said*
+
+The other write path, and the narrow one: it stores **when work happens**, nothing
+else. The morning text is not the record — this is. Without it no `tasks` row
+exists, the Dashboard's Today panel is empty by construction, a check-in has
+nothing to ask about, and tomorrow's replan cannot see what it is replacing.
+
+Call it every time you tell the student what to do on a day: compose the text,
+then commit the 1–3 blocks you actually named.
+
+**Request**
+
+```json
+{
+  "studentId": "j57a...",
+  "date": "2026-09-15",
+  "planRunId": "k82b...",
+  "picks": [
+    { "deadlineId": "m91c...", "startMin": 840, "endMin": 960 },
+    { "taskId": "t12d...", "startMin": 1140, "endMin": 1200 }
+  ]
+}
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `studentId` | yes | |
+| `date` | yes | `"YYYY-MM-DD"`, the same date you passed to `getFeasibleActions`. |
+| `picks` | yes | 1–3. More than three is not a plan, it is a list — `400`. |
+| `planRunId` | no | The run the plan came from, stored on each change for traceability. Must belong to this student and this date. |
+| `now` | no | Wall clock in ms, as in §3. |
+
+Each pick identifies its option the way §3 handed it to you, in this order:
+
+1. `taskId`, when the option has one;
+2. else `deadlineId`;
+3. else `title` + `courseId`, for free-standing work with neither id.
+
+`startMin`/`endMin` are minutes from local midnight and describe the block you
+told the student about. Do not round them, shift them, or make them up.
+
+### Verification — why this applies without an approval
+
+A plan commit is `origin: "planner"`, which is an **`auto`-tier origin**: it lands
+`applied` immediately, with no pending queue and nothing for the student to tap.
+That is not a loosening of the two-tier rule (core.md "Two-tier apply rule"), it
+is the rule working as designed. The tier keys off what a change *claims about
+the world*, and a plan commit claims nothing — it is you choosing among options
+Core computed, which is the plan itself rather than an interpretation of anything
+the student said. It is the one origin Voice can produce that carries no
+provenance, because it asserts no fact.
+
+What makes that safe is that **Core re-verifies every pick against its own
+feasible set** before it writes anything, using the same cache rule §3 serves
+you from — so the set being checked is the set you were shown. For each pick:
+
+- it must match an option in that set (by `taskId`, else `deadlineId`, else
+  `title` + `courseId`), and no two picks may name the same work;
+- its block must sit inside a free window that option can use — the window a
+  `fits` entry points at, which is availability minus class blocks minus the past;
+- it must end by the due minute on the due day.
+
+The window is the unit, not the `fits` span itself: a `fits` entry is Core's
+*suggested* slot (it starts at the head of the window and runs one effort estimate
+long), so requiring literal containment would make two blocks in one afternoon
+impossible. The hard guarantees of §3 — never a class, never past the due time —
+are properties of the window and the due time, and both are enforced exactly.
+
+**Any violation is a `400` naming the offending pick, and nothing at all is
+written** — a half-committed day is worse than a refused one. A rejection means
+you proposed a time that was not feasible; re-read `fits` rather than retrying.
+
+### Authoritative for the date
+
+A commit **replaces** that day's plan. Tasks you created (`createdBy: "agent"`)
+that are still open, planned for that date, and not among these picks come back
+**unplanned** — `plannedFor` cleared, not `status: "skipped"`. The student never
+said no; the plan simply changed. Two things are never touched: tasks the student
+made themselves, and tasks already `done` or `skipped` (their planned day is a
+record of what happened, not a plan to revise).
+
+So a replan sends the **whole new day**, never just the block that moved.
+
+### Idempotency
+
+Committing the same picks twice writes no second change: each pick's before and
+after are compared and a no-op is skipped. Retry freely.
+
+**Response `200`**
+
+```json
+{
+  "ok": true,
+  "committed": [
+    {
+      "taskId": "t12d...",
+      "deadlineId": "m91c...",
+      "title": "Pset 4",
+      "plannedFor": "2026-09-15",
+      "plannedStartMin": 840,
+      "plannedEndMin": 960
+    }
+  ],
+  "unplanned": 1
+}
+```
+
+`unplanned` counts the agent tasks this commit took off the day.
+
+A pick with a `deadlineId` and no task yet emits one `task_created`
+(`type: "do"`, `status: "todo"`, `createdBy: "agent"`, carrying the deadline's
+title and the option's effort estimate); a pick with an existing task emits one
+`task_updated`. Each change's `reason` reads `planned in the thread for <date>`,
+or `replanned …` when that task was already on a day.
 
 ---
 
@@ -710,6 +840,7 @@ routes above.
 |---|---|---|
 | `internal.voice.getFeasibleActions` | internalQuery | The plan, cache-aware. |
 | `internal.voice.proposeChange` | internalMutation | Propose a change. |
+| `internal.voice.commitPlan` | internalMutation | Commit a day's plan, verified. |
 | `internal.voice.recordSignal` | internalMutation | Record a signal. |
 | `internal.voice.logUsage` | internalMutation | Log an LLM call. |
 | `internal.voice.resolveStudent` | internalQuery | Phone/Clerk id → student. |
