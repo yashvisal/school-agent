@@ -71,12 +71,33 @@ export function tierFor(
 // propose
 // ---------------------------------------------------------------------------
 
+/**
+ * `morningHourLocal` decides when a student is texted, and a Convex validator
+ * can say "number" but not "an integer in 0-23". So the range is enforced here,
+ * at the one write boundary every origin funnels through.
+ *
+ * Refused, never clamped or dropped: an agent that parsed "half seven" as `7.5`
+ * or a timezone slip that produced `24` is a mis-read, and silently rounding it
+ * would text the student at an hour nobody chose — a 4am push presented as
+ * theirs. A `400` sends it back to be asked again.
+ */
+function assertMorningHour(input: ProposeChangeInput): void {
+  if (input.entity.table !== "students") return
+  const hour = asBag(input.after).morningHourLocal
+  if (hour === undefined) return
+  if (typeof hour !== "number" || !Number.isInteger(hour) || hour < 0 || hour > 23) {
+    throw new Error("400: morningHourLocal must be an integer hour 0–23")
+  }
+}
+
 export async function proposeChangeInternal(
   ctx: MutationCtx,
   input: ProposeChangeInput
 ): Promise<ProposeChangeResult> {
   const now = Date.now()
   const tier = tierFor(input.origin, input.conflict)
+
+  assertMorningHour(input)
 
   // `confirmedInline` rests on the model's honesty; the evidence requirement is
   // ACCOUNTABILITY, not proof — the quoted reply lands in the change feed so a
@@ -341,7 +362,7 @@ const STUDENT_KEYS = [
   "classBlocks",
   "availability",
   "status",
-  "nightlyHourLocal",
+  "morningHourLocal",
 ] as const
 
 /**
@@ -356,7 +377,7 @@ const CHAT_STUDENT_KEYS = [
   "availability",
   "semesterStart",
   "semesterEnd",
-  "nightlyHourLocal",
+  "morningHourLocal",
 ] as const
 
 /**

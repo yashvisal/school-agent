@@ -8,10 +8,12 @@ import { internal } from "./_generated/api"
  * Both jobs are hourly-or-faster and idempotent by design, so a missed or
  * duplicated tick is harmless:
  *
- * - The nightly pass fires every hour on the hour and picks out the students
- *   whose *local* clock just struck their nightly hour. One cron covers every
+ * - The morning pass fires every hour on the hour and picks out the students
+ *   whose *local* clock just struck their morning hour (`morningHourLocal`,
+ *   default 7am), then plans that same day for them. One cron covers every
  *   timezone, because the timezone is per-student data rather than deployment
- *   config, and `planRuns.operationId` makes a double tick a no-op.
+ *   config, and `planRuns.operationId` makes a double tick a no-op. The job and
+ *   the module keep the historical "nightly" name — see `nightly.ts`.
  * - Canvas has no push API, so polling is the only option; 30 minutes is the
  *   starting cadence from core.md ("start 30 min; back off").
  */

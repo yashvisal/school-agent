@@ -3,12 +3,13 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 import { internal } from "./_generated/api"
 import type { Id } from "./_generated/dataModel"
 import { localDateToMs } from "./lib/time"
-import { DEFAULT_NIGHTLY_HOUR, operationIdFor } from "./nightly"
+import { DEFAULT_MORNING_HOUR, operationIdFor } from "./nightly"
 import { CLERK_ID, OTHER_CLERK_ID, setupTest } from "./test.setup"
 
 /**
- * The nightly precompute and the Voice trigger (core.md, "Nightly precompute";
- * vision §6.1).
+ * The morning precompute and the Voice trigger (core.md, "Nightly precompute";
+ * vision §6.1). The module keeps the historical `nightly` name; the pass runs at
+ * the student's morning hour and plans that same day.
  *
  * The failure this suite exists to prevent is a duplicate morning text. The pass
  * runs hourly and both ends can retry, so idempotency is asserted at every
@@ -23,13 +24,14 @@ import { CLERK_ID, OTHER_CLERK_ID, setupTest } from "./test.setup"
 const TZ = "America/New_York"
 const VOICE_URL = "https://voice.example.com"
 
-/** 2026-09-14 is a Monday; the pass computes for Tuesday the 15th. */
+/** 2026-09-14 is a Monday; the pass runs that morning and plans that same day. */
 const TODAY = "2026-09-14"
+/** Only for the after-midnight ticks: the pass never *plans* a future day. */
 const TOMORROW = "2026-09-15"
 const at = (date: string, minutes: number) => localDateToMs(date, minutes, TZ)
 
-/** 4am local on the 14th — the default nightly hour. */
-const NIGHTLY_NOW = at(TODAY, DEFAULT_NIGHTLY_HOUR * 60)
+/** 7am local on the 14th — the default morning hour. */
+const MORNING_NOW = at(TODAY, DEFAULT_MORNING_HOUR * 60)
 
 let fetchMock: ReturnType<typeof vi.fn>
 
@@ -123,16 +125,16 @@ const runsFor = (t: ReturnType<typeof setupTest>) =>
 describe("storeRun", () => {
   const payload = (studentId: Id<"students">, computedAt: number) => ({
     studentId,
-    date: TOMORROW,
+    date: TODAY,
     computedAt,
-    feasible: { date: TOMORROW, windows: [], options: [] },
+    feasible: { date: TODAY, windows: [], options: [] },
     pendingAnnotations: [],
     signalsDigest: emptyDigest,
   })
 
   test("derives a stable operationId from the student and the date", () => {
-    expect(operationIdFor("students_1", TOMORROW)).toBe(
-      `nightly:students_1:${TOMORROW}`
+    expect(operationIdFor("students_1", TODAY)).toBe(
+      `nightly:students_1:${TODAY}`
     )
   })
 
@@ -142,15 +144,15 @@ describe("storeRun", () => {
 
     const stored = await t.mutation(
       internal.nightly.storeRun,
-      payload(studentId, NIGHTLY_NOW)
+      payload(studentId, MORNING_NOW)
     )
     expect(stored.alreadyTriggered).toBe(false)
 
     const runs = await runsFor(t)
     expect(runs).toHaveLength(1)
     expect(runs[0]).toMatchObject({
-      date: TOMORROW,
-      operationId: operationIdFor(studentId, TOMORROW),
+      date: TODAY,
+      operationId: operationIdFor(studentId, TODAY),
       triggerStatus: "pending",
     })
   })
@@ -161,11 +163,11 @@ describe("storeRun", () => {
 
     const first = await t.mutation(
       internal.nightly.storeRun,
-      payload(studentId, NIGHTLY_NOW)
+      payload(studentId, MORNING_NOW)
     )
     const second = await t.mutation(
       internal.nightly.storeRun,
-      payload(studentId, NIGHTLY_NOW + 60_000)
+      payload(studentId, MORNING_NOW + 60_000)
     )
 
     expect(second.planRunId).toBe(first.planRunId)
@@ -178,7 +180,7 @@ describe("storeRun", () => {
 
     const first = await t.mutation(
       internal.nightly.storeRun,
-      payload(studentId, NIGHTLY_NOW)
+      payload(studentId, MORNING_NOW)
     )
     await t.mutation(internal.nightly.markTrigger, {
       planRunId: first.planRunId,
@@ -187,14 +189,14 @@ describe("storeRun", () => {
     })
 
     const second = await t.mutation(internal.nightly.storeRun, {
-      ...payload(studentId, NIGHTLY_NOW + 3_600_000),
-      feasible: { date: TOMORROW, windows: [], options: [] },
+      ...payload(studentId, MORNING_NOW + 3_600_000),
+      feasible: { date: TODAY, windows: [], options: [] },
     })
 
     expect(second.alreadyTriggered).toBe(false)
     const runs = await runsFor(t)
     expect(runs).toHaveLength(1)
-    expect(runs[0].computedAt).toBe(NIGHTLY_NOW + 3_600_000)
+    expect(runs[0].computedAt).toBe(MORNING_NOW + 3_600_000)
     // The previous failure is cleared, not carried forward.
     expect(runs[0].triggerStatus).toBe("pending")
     expect(runs[0].error).toBeUndefined()
@@ -206,7 +208,7 @@ describe("storeRun", () => {
 
     const first = await t.mutation(
       internal.nightly.storeRun,
-      payload(studentId, NIGHTLY_NOW)
+      payload(studentId, MORNING_NOW)
     )
     await t.mutation(internal.nightly.markTrigger, {
       planRunId: first.planRunId,
@@ -216,13 +218,13 @@ describe("storeRun", () => {
 
     const second = await t.mutation(
       internal.nightly.storeRun,
-      payload(studentId, NIGHTLY_NOW + 3_600_000)
+      payload(studentId, MORNING_NOW + 3_600_000)
     )
 
     expect(second.alreadyTriggered).toBe(true)
     expect(second.voiceSessionId).toBe("wrun_A")
     const runs = await runsFor(t)
-    expect(runs[0].computedAt).toBe(NIGHTLY_NOW) // snapshot preserved
+    expect(runs[0].computedAt).toBe(MORNING_NOW) // snapshot preserved
   })
 
   test("different students and different days get their own runs", async () => {
@@ -238,10 +240,10 @@ describe("storeRun", () => {
       })
     )
 
-    await t.mutation(internal.nightly.storeRun, payload(a.studentId, NIGHTLY_NOW))
-    await t.mutation(internal.nightly.storeRun, payload(b, NIGHTLY_NOW))
+    await t.mutation(internal.nightly.storeRun, payload(a.studentId, MORNING_NOW))
+    await t.mutation(internal.nightly.storeRun, payload(b, MORNING_NOW))
     await t.mutation(internal.nightly.storeRun, {
-      ...payload(a.studentId, NIGHTLY_NOW),
+      ...payload(a.studentId, MORNING_NOW),
       date: "2026-09-16",
     })
 
@@ -261,13 +263,13 @@ describe("runForStudent", () => {
 
     const result = await t.action(internal.nightly.runForStudent, {
       studentId: seeded.studentId,
-      date: TOMORROW,
-      now: NIGHTLY_NOW,
+      date: TODAY,
+      now: MORNING_NOW,
     })
 
     expect(result.triggerStatus).toBe("triggered")
     expect(result.voiceSessionId).toBe("wrun_A")
-    expect(result.date).toBe(TOMORROW)
+    expect(result.date).toBe(TODAY)
 
     const runs = await runsFor(t)
     expect(runs).toHaveLength(1)
@@ -280,14 +282,46 @@ describe("runForStudent", () => {
     expect(feasible.options.map((o) => o.title)).toEqual(["Pset 3"])
   })
 
+  test("the stored plan for today offers no window that has already passed", async () => {
+    const t = setupTest()
+    // An early riser: available from 6am, an hour before the pass runs.
+    const seeded = await seed(t, {
+      availability: {
+        weekly: [1, 2, 3, 4, 5].map((dayOfWeek) => ({
+          dayOfWeek,
+          startMin: 6 * 60,
+          endMin: 21 * 60,
+        })),
+        exceptions: [],
+      },
+    })
+    await addDeadline(t, seeded)
+
+    await t.action(internal.nightly.runForStudent, {
+      studentId: seeded.studentId,
+      date: TODAY,
+      now: MORNING_NOW,
+    })
+
+    const runs = await runsFor(t)
+    const feasible = runs[0].feasible as { windows: { startMin: number }[] }
+    expect(feasible.windows.length).toBeGreaterThan(0)
+    // Planning today rather than tomorrow only works because the planner drops
+    // the hours already gone: nothing is offered before the 7am pass.
+    for (const window of feasible.windows) {
+      expect(window.startMin).toBeGreaterThanOrEqual(DEFAULT_MORNING_HOUR * 60)
+    }
+    expect(feasible.windows[0].startMin).toBe(DEFAULT_MORNING_HOUR * 60)
+  })
+
   test("POSTs the reconciled Voice trigger contract (VOICE_TOOLS.md §8)", async () => {
     const t = setupTest()
     const seeded = await seed(t)
 
     await t.action(internal.nightly.runForStudent, {
       studentId: seeded.studentId,
-      date: TOMORROW,
-      now: NIGHTLY_NOW,
+      date: TODAY,
+      now: MORNING_NOW,
     })
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -307,10 +341,10 @@ describe("runForStudent", () => {
       date: string
       planRunId: string
     }
-    expect(body.operationId).toBe(operationIdFor(seeded.studentId, TOMORROW))
+    expect(body.operationId).toBe(operationIdFor(seeded.studentId, TODAY))
     expect(body.phone).toBe(PHONE)
     expect(body.kind).toBe("morning")
-    expect(body.date).toBe(TOMORROW)
+    expect(body.date).toBe(TODAY)
 
     const runs = await runsFor(t)
     expect(body.planRunId).toBe(runs[0]._id)
@@ -323,8 +357,8 @@ describe("runForStudent", () => {
 
     const result = await t.action(internal.nightly.runForStudent, {
       studentId: seeded.studentId,
-      date: TOMORROW,
-      now: NIGHTLY_NOW,
+      date: TODAY,
+      now: MORNING_NOW,
     })
 
     expect(result.triggerStatus).toBe("skipped")
@@ -341,8 +375,8 @@ describe("runForStudent", () => {
 
     const result = await t.action(internal.nightly.runForStudent, {
       studentId: seeded.studentId,
-      date: TOMORROW,
-      now: NIGHTLY_NOW,
+      date: TODAY,
+      now: MORNING_NOW,
     })
 
     expect(result.triggerStatus).toBe("skipped")
@@ -356,13 +390,13 @@ describe("runForStudent", () => {
 
     const first = await t.action(internal.nightly.runForStudent, {
       studentId: seeded.studentId,
-      date: TOMORROW,
-      now: NIGHTLY_NOW,
+      date: TODAY,
+      now: MORNING_NOW,
     })
     const second = await t.action(internal.nightly.runForStudent, {
       studentId: seeded.studentId,
-      date: TOMORROW,
-      now: NIGHTLY_NOW + 3_600_000,
+      date: TODAY,
+      now: MORNING_NOW + 3_600_000,
     })
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -380,8 +414,8 @@ describe("runForStudent", () => {
 
     const result = await t.action(internal.nightly.runForStudent, {
       studentId: seeded.studentId,
-      date: TOMORROW,
-      now: NIGHTLY_NOW,
+      date: TODAY,
+      now: MORNING_NOW,
     })
 
     expect(result.triggerStatus).toBe("skipped")
@@ -404,8 +438,8 @@ describe("runForStudent", () => {
 
     const result = await t.action(internal.nightly.runForStudent, {
       studentId: seeded.studentId,
-      date: TOMORROW,
-      now: NIGHTLY_NOW,
+      date: TODAY,
+      now: MORNING_NOW,
     })
 
     expect(result.triggerStatus).toBe("failed")
@@ -421,8 +455,8 @@ describe("runForStudent", () => {
 
     const result = await t.action(internal.nightly.runForStudent, {
       studentId: seeded.studentId,
-      date: TOMORROW,
-      now: NIGHTLY_NOW,
+      date: TODAY,
+      now: MORNING_NOW,
     })
 
     expect(result.triggerStatus).toBe("failed")
@@ -436,8 +470,8 @@ describe("runForStudent", () => {
 
     const result = await t.action(internal.nightly.runForStudent, {
       studentId: seeded.studentId,
-      date: TOMORROW,
-      now: NIGHTLY_NOW,
+      date: TODAY,
+      now: MORNING_NOW,
     })
 
     expect(result.triggerStatus).toBe("triggered")
@@ -451,8 +485,8 @@ describe("runForStudent", () => {
 
     const result = await t.action(internal.nightly.runForStudent, {
       studentId: seeded.studentId,
-      date: TOMORROW,
-      now: NIGHTLY_NOW,
+      date: TODAY,
+      now: MORNING_NOW,
     })
 
     expect(result.triggerStatus).toBe("skipped")
@@ -470,8 +504,8 @@ describe("runForStudent", () => {
 
     const result = await t.action(internal.nightly.runForStudent, {
       studentId: seeded.studentId,
-      date: TOMORROW,
-      now: NIGHTLY_NOW,
+      date: TODAY,
+      now: MORNING_NOW,
     })
 
     expect(result.triggerStatus).toBe("failed")
@@ -487,15 +521,15 @@ describe("runForStudent", () => {
 
     const first = await t.action(internal.nightly.runForStudent, {
       studentId: seeded.studentId,
-      date: TOMORROW,
-      now: NIGHTLY_NOW,
+      date: TODAY,
+      now: MORNING_NOW,
     })
     expect(first.triggerStatus).toBe("failed")
 
     const second = await t.action(internal.nightly.runForStudent, {
       studentId: seeded.studentId,
-      date: TOMORROW,
-      now: NIGHTLY_NOW + 3_600_000,
+      date: TODAY,
+      now: MORNING_NOW + 3_600_000,
     })
     expect(second.triggerStatus).toBe("triggered")
     expect(fetchMock).toHaveBeenCalledTimes(2)
@@ -533,8 +567,8 @@ describe("runForStudent", () => {
 
     await t.action(internal.nightly.runForStudent, {
       studentId: seeded.studentId,
-      date: TOMORROW,
-      now: NIGHTLY_NOW,
+      date: TODAY,
+      now: MORNING_NOW,
     })
 
     const rows = await t.run(async (ctx) => ({
@@ -568,17 +602,18 @@ describe("tick", () => {
     }
   }
 
-  test("starts a run at the student's local nightly hour", async () => {
+  test("starts a run for TODAY at the student's local morning hour", async () => {
     const t = setupTest()
     await seed(t)
 
-    const result = await t.action(internal.nightly.tick, { now: NIGHTLY_NOW })
+    const result = await t.action(internal.nightly.tick, { now: MORNING_NOW })
     await drain(t)
 
     expect(result).toEqual({ considered: 1, started: 1 })
     const runs = await runsFor(t)
     expect(runs).toHaveLength(1)
-    expect(runs[0].date).toBe(TOMORROW) // tomorrow, in the student's zone
+    // The day they are waking into, in their own zone — not the day after it.
+    expect(runs[0].date).toBe(TODAY)
     expect(runs[0].triggerStatus).toBe("triggered")
   })
 
@@ -587,7 +622,7 @@ describe("tick", () => {
     await seed(t)
 
     const result = await t.action(internal.nightly.tick, {
-      now: at(TODAY, (DEFAULT_NIGHTLY_HOUR + 3) * 60),
+      now: at(TODAY, (DEFAULT_MORNING_HOUR + 3) * 60),
     })
 
     expect(result).toEqual({ considered: 1, started: 0 })
@@ -595,15 +630,16 @@ describe("tick", () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  test("honours a student's chosen nightly hour", async () => {
+  test("honours a student's chosen morning hour", async () => {
     const t = setupTest()
-    await seed(t, { nightlyHourLocal: 6 })
+    await seed(t, { morningHourLocal: 10 })
 
-    expect(await t.action(internal.nightly.tick, { now: NIGHTLY_NOW })).toMatchObject({
+    // 7am is the default, and this student did not choose it.
+    expect(await t.action(internal.nightly.tick, { now: MORNING_NOW })).toMatchObject({
       started: 0,
     })
     expect(
-      await t.action(internal.nightly.tick, { now: at(TODAY, 6 * 60) })
+      await t.action(internal.nightly.tick, { now: at(TODAY, 10 * 60) })
     ).toMatchObject({ started: 1 })
   })
 
@@ -620,8 +656,8 @@ describe("tick", () => {
       })
     )
 
-    // 4am in New York is 1am in Los Angeles, so only the first student runs.
-    const result = await t.action(internal.nightly.tick, { now: NIGHTLY_NOW })
+    // 7am in New York is 4am in Los Angeles, so only the first student runs.
+    const result = await t.action(internal.nightly.tick, { now: MORNING_NOW })
     await drain(t)
     expect(result).toEqual({ considered: 2, started: 1 })
 
@@ -637,7 +673,7 @@ describe("tick", () => {
     const t = setupTest()
     await seed(t, { status: "paused" })
 
-    const result = await t.action(internal.nightly.tick, { now: NIGHTLY_NOW })
+    const result = await t.action(internal.nightly.tick, { now: MORNING_NOW })
     expect(result).toEqual({ considered: 0, started: 0 })
     expect(await runsFor(t)).toHaveLength(0)
   })
@@ -646,9 +682,9 @@ describe("tick", () => {
     const t = setupTest()
     await seed(t)
 
-    await t.action(internal.nightly.tick, { now: NIGHTLY_NOW })
+    await t.action(internal.nightly.tick, { now: MORNING_NOW })
     await drain(t)
-    const second = await t.action(internal.nightly.tick, { now: NIGHTLY_NOW + 60_000 })
+    const second = await t.action(internal.nightly.tick, { now: MORNING_NOW + 60_000 })
     await drain(t)
 
     expect(second.started).toBe(0)
@@ -661,13 +697,13 @@ describe("tick", () => {
     const t = setupTest()
     await seed(t)
 
-    await t.action(internal.nightly.tick, { now: NIGHTLY_NOW })
+    await t.action(internal.nightly.tick, { now: MORNING_NOW })
     await drain(t)
     expect((await runsFor(t))[0].triggerStatus).toBe("failed")
 
     // An hour later, on the same local day: eve is back, and the pass retries.
     const second = await t.action(internal.nightly.tick, {
-      now: NIGHTLY_NOW + 60 * 60 * 1000,
+      now: MORNING_NOW + 60 * 60 * 1000,
     })
     await drain(t)
 
@@ -679,11 +715,72 @@ describe("tick", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
+  test("a late-evening student's failed run is retried across local midnight", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("nope", { status: 500 }))
+    const t = setupTest()
+    const { studentId } = await seed(t, { morningHourLocal: 20 })
+
+    await t.action(internal.nightly.tick, { now: at(TODAY, 20 * 60) })
+    await drain(t)
+    const failed = await runsFor(t)
+    expect(failed).toHaveLength(1)
+    expect(failed[0].date).toBe(TODAY)
+    expect(failed[0].triggerStatus).toBe("failed")
+
+    // 01:00 the next day is five hours into the window that opened at 20:00 —
+    // still yesterday's run, under yesterday's operationId. Reading the offset
+    // as `1 - 20` would abandon this student every night.
+    const second = await t.action(internal.nightly.tick, {
+      now: at(TOMORROW, 60),
+    })
+    await drain(t)
+
+    expect(second.started).toBe(1)
+    const runs = await runsFor(t)
+    expect(runs).toHaveLength(1)
+    expect(runs[0].operationId).toBe(operationIdFor(studentId, TODAY))
+    expect(runs[0].triggerStatus).toBe("triggered")
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  test("a tick after midnight never starts a first run for the day just ended", async () => {
+    const t = setupTest()
+    await seed(t, { morningHourLocal: 20 })
+
+    // Nothing failed, because nothing ever ran: the 20:00 tick was missed. The
+    // recovery window recovers; it does not manufacture a plan for a day the
+    // student has already lived.
+    const result = await t.action(internal.nightly.tick, { now: at(TOMORROW, 60) })
+    await drain(t)
+
+    expect(result).toEqual({ considered: 1, started: 0 })
+    expect(await runsFor(t)).toHaveLength(0)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  test("the midnight-crossing window leaves a plain 7am student alone", async () => {
+    const t = setupTest()
+    await seed(t)
+
+    // 01:00 is nineteen hours short of this student's next morning hour and six
+    // hours past the last one — outside the window at both ends.
+    expect(
+      await t.action(internal.nightly.tick, { now: at(TOMORROW, 60) })
+    ).toEqual({ considered: 1, started: 0 })
+    expect(await runsFor(t)).toHaveLength(0)
+
+    // Their own 7am still starts a run, dated that day.
+    const own = await t.action(internal.nightly.tick, { now: MORNING_NOW })
+    await drain(t)
+    expect(own.started).toBe(1)
+    expect((await runsFor(t))[0].date).toBe(TODAY)
+  })
+
   test("a warming-gate skip is retried once the student warms", async () => {
     const t = setupTest()
     const { studentId } = await seed(t, { inboundCount: 1 })
 
-    await t.action(internal.nightly.tick, { now: NIGHTLY_NOW })
+    await t.action(internal.nightly.tick, { now: MORNING_NOW })
     await drain(t)
     expect((await runsFor(t))[0].triggerStatus).toBe("skipped")
     expect((await runsFor(t))[0].error).toBe("contact not warmed (1/3 inbound)")
@@ -692,7 +789,7 @@ describe("tick", () => {
     // The student texts twice more; the next tick in the window reconsiders.
     await t.run(async (ctx) => ctx.db.patch("students", studentId, { inboundCount: 3 }))
     const second = await t.action(internal.nightly.tick, {
-      now: NIGHTLY_NOW + 60 * 60 * 1000,
+      now: MORNING_NOW + 60 * 60 * 1000,
     })
     await drain(t)
 
@@ -708,12 +805,12 @@ describe("tick", () => {
     const t = setupTest()
     await seed(t)
 
-    await t.action(internal.nightly.tick, { now: NIGHTLY_NOW })
+    await t.action(internal.nightly.tick, { now: MORNING_NOW })
     await drain(t)
     expect((await runsFor(t))[0].error).toBe("EVE_VOICE_URL not set")
 
     const second = await t.action(internal.nightly.tick, {
-      now: NIGHTLY_NOW + 60 * 60 * 1000,
+      now: MORNING_NOW + 60 * 60 * 1000,
     })
     await drain(t)
 
@@ -726,10 +823,10 @@ describe("tick", () => {
     const t = setupTest()
     await seed(t)
 
-    await t.action(internal.nightly.tick, { now: NIGHTLY_NOW })
+    await t.action(internal.nightly.tick, { now: MORNING_NOW })
     await drain(t)
     const second = await t.action(internal.nightly.tick, {
-      now: NIGHTLY_NOW + 2 * 60 * 60 * 1000,
+      now: MORNING_NOW + 2 * 60 * 60 * 1000,
     })
     await drain(t)
 
@@ -743,7 +840,7 @@ describe("tick", () => {
 
     // Inside the recovery window, but there is nothing to recover.
     const result = await t.action(internal.nightly.tick, {
-      now: NIGHTLY_NOW + 2 * 60 * 60 * 1000,
+      now: MORNING_NOW + 2 * 60 * 60 * 1000,
     })
     await drain(t)
 
@@ -756,7 +853,7 @@ describe("tick", () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {})
     await seed(t, { timezone: "Mars/Olympus_Mons" })
 
-    const result = await t.action(internal.nightly.tick, { now: NIGHTLY_NOW })
+    const result = await t.action(internal.nightly.tick, { now: MORNING_NOW })
     await drain(t)
 
     expect(result).toEqual({ considered: 1, started: 0 })
@@ -785,7 +882,7 @@ describe("tick", () => {
       }
     })
 
-    const result = await t.action(internal.nightly.tick, { now: NIGHTLY_NOW })
+    const result = await t.action(internal.nightly.tick, { now: MORNING_NOW })
     await drain(t)
 
     expect(result).toEqual({ considered: 251, started: 1 })
@@ -800,14 +897,14 @@ describe("findRun", () => {
   test("resolves a run by its operationId, and null when there is none", async () => {
     const t = setupTest()
     const seeded = await seed(t)
-    const operationId = operationIdFor(seeded.studentId, TOMORROW)
+    const operationId = operationIdFor(seeded.studentId, TODAY)
 
     expect(await t.query(internal.nightly.findRun, { operationId })).toBeNull()
 
     await t.action(internal.nightly.runForStudent, {
       studentId: seeded.studentId,
-      date: TOMORROW,
-      now: NIGHTLY_NOW,
+      date: TODAY,
+      now: MORNING_NOW,
     })
 
     expect(await t.query(internal.nightly.findRun, { operationId })).toMatchObject({
@@ -818,16 +915,18 @@ describe("findRun", () => {
 })
 
 describe("runNow", () => {
-  test("defaults to tomorrow in the student's own timezone", async () => {
+  test("defaults to today in the student's own timezone", async () => {
     const t = setupTest()
     const seeded = await seed(t)
 
+    // 10pm local: still the 14th where the student lives, so that is the date —
+    // the default follows the student's clock, never the server's.
     const result = await t.action(internal.nightly.runNow, {
       studentId: seeded.studentId,
       now: at(TODAY, 22 * 60),
     })
 
-    expect(result.date).toBe(TOMORROW)
+    expect(result.date).toBe(TODAY)
     expect(result.triggerStatus).toBe("triggered")
   })
 
@@ -838,7 +937,7 @@ describe("runNow", () => {
     const result = await t.action(internal.nightly.runNow, {
       studentId: seeded.studentId,
       date: "2026-09-18",
-      now: NIGHTLY_NOW,
+      now: MORNING_NOW,
     })
 
     expect(result.date).toBe("2026-09-18")

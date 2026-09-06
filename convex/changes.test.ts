@@ -752,7 +752,7 @@ describe("tenancy — a change may only ever touch its own student", () => {
         studentId,
         kind: "chat_decision",
         entity: { table: "students", id: other.studentId },
-        after: { nightlyHourLocal: 23 },
+        after: { morningHourLocal: 23 },
         origin: "chat",
         confirmedInline: true,
       evidence: { quotedReply: "yeah" },
@@ -760,7 +760,7 @@ describe("tenancy — a change may only ever touch its own student", () => {
     ).rejects.toThrow(/403/)
 
     const them = await t.run((ctx) => ctx.db.get("students", other.studentId))
-    expect(them?.nightlyHourLocal).toBeUndefined()
+    expect(them?.morningHourLocal).toBeUndefined()
   })
 
   test("a chat change reaches the schedule fields and nothing else", async () => {
@@ -773,7 +773,7 @@ describe("tenancy — a change may only ever touch its own student", () => {
       entity: { table: "students", id: studentId },
       after: {
         // allowed
-        nightlyHourLocal: 6,
+        morningHourLocal: 6,
         semesterEnd: "2026-12-18",
         classBlocks: [{ dayOfWeek: 1, startMin: 600, endMin: 675 }],
         // identity and routing — an interpreted sentence must not move these
@@ -788,13 +788,45 @@ describe("tenancy — a change may only ever touch its own student", () => {
     })
 
     const student = await t.run((ctx) => ctx.db.get("students", studentId))
-    expect(student?.nightlyHourLocal).toBe(6)
+    expect(student?.morningHourLocal).toBe(6)
     expect(student?.semesterEnd).toBe("2026-12-18")
     expect(student?.classBlocks).toHaveLength(1)
     expect(student?.phone).toBeUndefined()
     expect(student?.status).toBe("active")
     expect(student?.timezone).toBe("America/New_York")
     expect(student?.clerkId).toBe(CLERK_ID)
+  })
+
+  test("a morningHourLocal that is not a whole hour 0-23 is refused, not rounded", async () => {
+    const t = setupTest()
+    const { studentId } = await seed(t)
+
+    const propose = (morningHourLocal: number) =>
+      t.mutation(internal.changes.propose, {
+        studentId,
+        kind: "availability_updated",
+        entity: { table: "students", id: studentId },
+        after: { morningHourLocal },
+        origin: "chat",
+        confirmedInline: true,
+        evidence: { quotedReply: "yeah" },
+      })
+
+    // "half seven" mis-parsed, and both ends of the clock walked off.
+    for (const bad of [7.5, -1, 24]) {
+      await expect(propose(bad)).rejects.toThrow(
+        /400: morningHourLocal must be an integer hour/
+      )
+    }
+
+    // Refused outright — never clamped to an hour the student never chose.
+    let student = await t.run((ctx) => ctx.db.get("students", studentId))
+    expect(student?.morningHourLocal).toBeUndefined()
+
+    // The last legal hour of the day still goes through.
+    await propose(23)
+    student = await t.run((ctx) => ctx.db.get("students", studentId))
+    expect(student?.morningHourLocal).toBe(23)
   })
 
   test("a manual change may set the phone, and it is normalized on the way in", async () => {
