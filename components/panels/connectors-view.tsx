@@ -400,13 +400,6 @@ function UploadSection({
 
   const upload = async (row: UploadRow) => {
     patch(row.id, { status: "uploading", error: undefined })
-    /* Snapshotted BEFORE anything is awaited, not after `start` resolves. A
-     * reused source can be polled by the cron mid-upload, and reading the map
-     * afterwards would take that fresh timestamp as the baseline — leaving the
-     * row at "Parsing…" forever, since this extraction's own poll would then
-     * have to beat a value that already moved. An older baseline is only ever
-     * safe: any later value still differs from it. */
-    const polledAtBeforeUpload = polledAtRef.current
     try {
       const url = await generateUploadUrl({})
       const response = await fetch(url, {
@@ -419,6 +412,13 @@ function UploadSection({
         throw new Error(`storage returned ${response.status}`)
       }
       const { storageId } = (await response.json()) as { storageId: string }
+      /* Snapshotted immediately before `start`, after the storage upload. Too
+       * early (before the upload) and a poll of a reused source during the
+       * upload makes its timestamp look like THIS extraction finishing —
+       * "Parsed" too soon. Too late (after `start` resolves) and a poll in that
+       * gap becomes the baseline this extraction can never beat — "Parsing…"
+       * forever. The narrowest window is the one between here and `start`. */
+      const polledAtBeforeUpload = polledAtRef.current
       const { sourceId } = await start({
         kind,
         storageId: storageId as Id<"_storage">,
