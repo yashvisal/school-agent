@@ -18,7 +18,7 @@ import {
 /**
  * The agent HTTP surface — how eve's Voice agent reaches Core.
  *
- * Six routes: the three planning tools, usage logging, phone → student
+ * Seven routes: the four planning tools, usage logging, phone → student
  * resolution, and the inbound-message log (dedupe / contact-warmed / evidence).
  * Every one:
  *
@@ -129,6 +129,43 @@ http.route({
       return jsonResponse({ ok: true, ...result })
     } catch (error) {
       return errorToResponse(error, "/voice/proposeChange")
+    }
+  }),
+})
+
+// ---------------------------------------------------------------------------
+// commitPlan
+// ---------------------------------------------------------------------------
+
+http.route({
+  path: "/voice/commitPlan",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const gated = await gate(request)
+    if ("response" in gated) return gated.response
+
+    const studentId = studentIdOf(gated.body)
+    const date = asDate(gated.body.date)
+    const picks = gated.body.picks
+    if (!studentId) return errorResponse(400, "studentId is required")
+    if (!date) return errorResponse(400, "date is required, as YYYY-MM-DD")
+    if (!Array.isArray(picks)) return errorResponse(400, "picks must be an array")
+
+    try {
+      // Shape is enforced by the mutation's validators; the pick-by-pick
+      // verification against the feasible set throws `400: …` messages that
+      // `errorToResponse` passes through, naming the offending block.
+      const result = await ctx.runMutation(internal.voice.commitPlan, {
+        studentId,
+        date,
+        planRunId: asString(gated.body.planRunId) as Id<"planRuns"> | undefined,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        picks: picks as any,
+        now: asNumber(gated.body.now),
+      })
+      return jsonResponse({ ok: true, ...result })
+    } catch (error) {
+      return errorToResponse(error, "/voice/commitPlan")
     }
   }),
 })
