@@ -1031,3 +1031,225 @@ describe("authorization", () => {
     )
   })
 })
+
+describe("changes.proposeManual — the Fix button", () => {
+  const seedDeadline = async (t: ReturnType<typeof setupTest>) => {
+    const { studentId, courseId } = await seed(t)
+    const { changeId } = await t.mutation(internal.changes.propose, {
+      studentId,
+      courseId,
+      kind: "deadline_added",
+      entity: { table: "deadlines" },
+      after: deadlineAfter(courseId),
+      origin: "canvas",
+    })
+    const deadlineId = (await t.run((ctx) => ctx.db.get("changes", changeId)))?.entity
+      .id as Id<"deadlines">
+    return { studentId, courseId, deadlineId }
+  }
+
+  const otherStudent = (t: ReturnType<typeof setupTest>) =>
+    t.run(async (ctx) =>
+      ctx.db.insert("students", {
+        clerkId: OTHER_CLERK_ID,
+        timezone: "America/New_York",
+        classBlocks: [],
+        availability: { weekly: [], exceptions: [] },
+        status: "active",
+      })
+    )
+
+  test("a student's own correction applies immediately, sourced manual", async () => {
+    const t = setupTest()
+    const { deadlineId } = await seedDeadline(t)
+    const corrected = Date.UTC(2026, 8, 17, 3, 59)
+
+    const result = await t
+      .withIdentity({ subject: CLERK_ID })
+      .mutation(api.changes.proposeManual, {
+        kind: "deadline_moved",
+        entity: { table: "deadlines", id: deadlineId },
+        before: { dueAt: Date.UTC(2026, 8, 15, 3, 59) },
+        after: { dueAt: corrected },
+        reason: "Professor moved it in class",
+      })
+
+    expect(result.status).toBe("approved")
+
+    const { change, deadline } = await t.run(async (ctx) => ({
+      change: await ctx.db.get("changes", result.changeId),
+      deadline: await ctx.db.get("deadlines", deadlineId),
+    }))
+    expect(change?.origin).toBe("manual")
+    // The LLM-free path is still `needs_approval` by tier; the tap is the approval.
+    expect(change?.tier).toBe("needs_approval")
+    expect(change?.resolvedVia).toBe("web")
+    expect(deadline?.dueAt).toBe(corrected)
+    // Provenance moves with the fact: it is no longer a Canvas-asserted date.
+    expect(deadline?.provenance.source).toBe("manual")
+  })
+
+  test("signed out is refused and nothing moves", async () => {
+    const t = setupTest()
+    const { deadlineId } = await seedDeadline(t)
+
+    await expect(
+      t.mutation(api.changes.proposeManual, {
+        kind: "deadline_updated",
+        entity: { table: "deadlines", id: deadlineId },
+        after: { title: "Pset 3 (revised)" },
+      })
+    ).rejects.toThrow(/401/)
+    expect((await t.run((ctx) => ctx.db.get("deadlines", deadlineId)))?.title).toBe(
+      "Pset 3"
+    )
+  })
+
+  test("a row from another student is a 403, not a patch", async () => {
+    const t = setupTest()
+    const { deadlineId } = await seedDeadline(t)
+    await otherStudent(t)
+
+    await expect(
+      t.withIdentity({ subject: OTHER_CLERK_ID }).mutation(api.changes.proposeManual, {
+        kind: "deadline_updated",
+        entity: { table: "deadlines", id: deadlineId },
+        after: { title: "mine now" },
+      })
+    ).rejects.toThrow(/403/)
+    expect((await t.run((ctx) => ctx.db.get("deadlines", deadlineId)))?.title).toBe(
+      "Pset 3"
+    )
+  })
+
+  test("a kind may only edit its own table", async () => {
+    const t = setupTest()
+    const { courseId, deadlineId } = await seedDeadline(t)
+
+    await expect(
+      t.withIdentity({ subject: CLERK_ID }).mutation(api.changes.proposeManual, {
+        kind: "course_updated",
+        entity: { table: "deadlines", id: deadlineId },
+        after: { name: "Not a course" },
+      })
+    ).rejects.toThrow(/400/)
+
+    // The coherent version of the same edit works.
+    const ok = await t
+      .withIdentity({ subject: CLERK_ID })
+      .mutation(api.changes.proposeManual, {
+        kind: "course_updated",
+        entity: { table: "courses", id: courseId },
+        after: { code: "CS 201" },
+      })
+    expect(ok.status).toBe("approved")
+    expect((await t.run((ctx) => ctx.db.get("courses", courseId)))?.code).toBe("CS 201")
+  })
+
+  test("a missing row is a 404, and the student table is unreachable", async () => {
+    const t = setupTest()
+    const { studentId, deadlineId } = await seedDeadline(t)
+    await t.run(async (ctx) => ctx.db.delete("deadlines", deadlineId))
+
+    await expect(
+      t.withIdentity({ subject: CLERK_ID }).mutation(api.changes.proposeManual, {
+        kind: "deadline_updated",
+        entity: { table: "deadlines", id: deadlineId },
+        after: { title: "gone" },
+      })
+    ).rejects.toThrow(/404/)
+
+    // `students` is not in the argument validator at all — the account is edited
+    // in Settings, never by a diff card.
+    await expect(
+      t.withIdentity({ subject: CLERK_ID }).mutation(api.changes.proposeManual, {
+        kind: "other",
+        // @ts-expect-error — the validator does not accept `students`.
+        entity: { table: "students", id: studentId },
+        after: { phone: "+15551230000" },
+      })
+    ).rejects.toThrow()
+    expect((await t.run((ctx) => ctx.db.get("students", studentId)))?.phone).toBe(
+      undefined
+    )
+  })
+
+  test("fixing a pending card supersedes it: rejected, and the fix applies", async () => {
+    const t = setupTest()
+    const { studentId, courseId, deadlineId } = await seedDeadline(t)
+
+    // The syllabus parse says the 12th, and is waiting in the queue.
+    const parsed = await t.mutation(internal.changes.propose, {
+      studentId,
+      courseId,
+      kind: "deadline_moved",
+      entity: { table: "deadlines", id: deadlineId },
+      before: { dueAt: Date.UTC(2026, 8, 15, 3, 59) },
+      after: { dueAt: Date.UTC(2026, 8, 12, 3, 59) },
+      origin: "syllabus",
+    })
+    expect(parsed.status).toBe("pending")
+
+    const corrected = Date.UTC(2026, 8, 14, 3, 59)
+    const fix = await t
+      .withIdentity({ subject: CLERK_ID })
+      .mutation(api.changes.proposeManual, {
+        kind: "deadline_moved",
+        entity: { table: "deadlines", id: deadlineId },
+        after: { dueAt: corrected },
+        supersedesChangeId: parsed.changeId,
+        reason: "It's the 14th",
+      })
+
+    const { stale, deadline } = await t.run(async (ctx) => ({
+      stale: await ctx.db.get("changes", parsed.changeId),
+      deadline: await ctx.db.get("deadlines", deadlineId),
+    }))
+    expect(fix.status).toBe("approved")
+    expect(stale?.status).toBe("rejected")
+    expect(stale?.resolvedVia).toBe("web")
+    expect(deadline?.dueAt).toBe(corrected)
+
+    // And the queue is empty — no stale card left asking about the 12th.
+    const pending = await t
+      .withIdentity({ subject: CLERK_ID })
+      .query(api.changes.listPending, {
+        studentId,
+        paginationOpts: { numItems: 50, cursor: null },
+      })
+    expect(pending.page).toHaveLength(0)
+  })
+
+  test("a superseded change belonging to someone else is refused", async () => {
+    const t = setupTest()
+    const { deadlineId } = await seedDeadline(t)
+    const otherStudentId = await otherStudent(t)
+    const foreign = await t.run(async (ctx) =>
+      ctx.db.insert("changes", {
+        studentId: otherStudentId,
+        kind: "deadline_moved",
+        entity: { table: "deadlines" },
+        origin: "syllabus",
+        tier: "needs_approval",
+        status: "pending",
+        snapshotIds: [],
+        createdAt: Date.now(),
+      })
+    )
+
+    await expect(
+      t.withIdentity({ subject: CLERK_ID }).mutation(api.changes.proposeManual, {
+        kind: "deadline_updated",
+        entity: { table: "deadlines", id: deadlineId },
+        after: { title: "Pset 3 (revised)" },
+        supersedesChangeId: foreign,
+      })
+    ).rejects.toThrow(/403/)
+
+    // Refused as a whole: neither the correction nor the rejection landed.
+    expect((await t.run((ctx) => ctx.db.get("deadlines", deadlineId)))?.title).toBe(
+      "Pset 3"
+    )
+    expect((await t.run((ctx) => ctx.db.get("changes", foreign)))?.status).toBe("pending")
+  })
+})

@@ -3,12 +3,15 @@ import { v } from "convex/values"
 
 import { internalMutation, mutation, query } from "./_generated/server"
 import { getCurrentStudent, requireStudent } from "./lib/auth"
+import type { Id } from "./_generated/dataModel"
 import {
   approveChangeInternal,
   expireStaleInternal,
+  loadOwned,
   proposeChangeInternal,
   rejectChangeInternal,
 } from "./lib/changes"
+import type { OwnedTable } from "./lib/changes"
 import {
   changeDocV,
   changeEntityV,
@@ -50,6 +53,112 @@ export const propose = internalMutation({
   },
   returns: proposeResultV,
   handler: async (ctx, args) => await proposeChangeInternal(ctx, args),
+})
+
+/**
+ * The Fix button (face.md "Design rules": every edit is a fact fix, and it goes
+ * through `changes` like everything else).
+ *
+ * Origin is forced to `manual` — the caller does not get to say where the fact
+ * came from — which makes `tierFor` call it `needs_approval`. That is the right
+ * default for an LLM-free path, and the student's own tap IS the approval, so
+ * the change is proposed and approved in the same mutation, exactly as
+ * `onboarding.resolvePastDeadlines` does. A correction the student typed must
+ * not land in the queue asking the student to confirm it.
+ *
+ * Scope is narrow on purpose: only the five edit kinds, only the three
+ * student-scoped fact tables, only rows that already exist and belong to the
+ * caller. `students` is unreachable by construction — the account is edited in
+ * Settings, not by a diff card.
+ */
+const manualKindV = v.union(
+  v.literal("deadline_moved"),
+  v.literal("deadline_updated"),
+  v.literal("deadline_removed"),
+  v.literal("course_updated"),
+  v.literal("task_updated"),
+  v.literal("other")
+)
+
+const manualEntityV = v.object({
+  table: v.union(v.literal("deadlines"), v.literal("courses"), v.literal("tasks")),
+  /** Required: a fix edits a row the student is looking at; it never creates one. */
+  id: v.string(),
+})
+
+/** Which table each kind is allowed to name, so a kind cannot patch the wrong row. */
+const KIND_TABLE: Record<string, OwnedTable | null> = {
+  deadline_moved: "deadlines",
+  deadline_updated: "deadlines",
+  deadline_removed: "deadlines",
+  course_updated: "courses",
+  task_updated: "tasks",
+  // `other` is the escape hatch for a field none of the above name; `applyChange`
+  // dispatches it on `entity.table`, so any of the three is coherent.
+  other: null,
+}
+
+export const proposeManual = mutation({
+  args: {
+    kind: manualKindV,
+    entity: manualEntityV,
+    before: v.optional(v.any()),
+    after: v.optional(v.any()),
+    courseId: v.optional(v.id("courses")),
+    reason: v.optional(v.string()),
+    /**
+     * The pending card this correction answers — the typical Fix ("the syllabus
+     * parse said the 12th, it's the 14th"). Rejected in the same transaction so
+     * the queue does not keep asking about a value the student just overrode.
+     */
+    supersedesChangeId: v.optional(v.id("changes")),
+  },
+  returns: proposeResultV,
+  handler: async (ctx, args) => {
+    const student = await getCurrentStudent(ctx)
+    if (!student) throw new Error("401: not signed in")
+
+    const required = KIND_TABLE[args.kind]
+    if (required && required !== args.entity.table) {
+      throw new Error(`400: ${args.kind} edits ${required}, not ${args.entity.table}`)
+    }
+
+    const table = args.entity.table
+    const entityId = args.entity.id as Id<OwnedTable>
+    // Ownership at the front door as well as in `applyChange`: a 404/403 here is
+    // an answer the UI can show, where a silently no-op'd apply is a Fix button
+    // that appears to work and changes nothing.
+    const doc = await loadOwned(ctx, table, entityId, student._id)
+    if (!doc) throw new Error("404: entity not found")
+
+    if (args.courseId) {
+      const course = await ctx.db.get("courses", args.courseId)
+      if (!course || course.studentId !== student._id) {
+        throw new Error("403: course does not belong to you")
+      }
+    }
+
+    if (args.supersedesChangeId) {
+      const superseded = await ctx.db.get("changes", args.supersedesChangeId)
+      if (!superseded) throw new Error("404: change not found")
+      if (superseded.studentId !== student._id) throw new Error("403: forbidden")
+      // Idempotent: an already-resolved card is left alone rather than refused,
+      // so a double-tap still lands the correction.
+      await rejectChangeInternal(ctx, args.supersedesChangeId, "web")
+    }
+
+    const { changeId } = await proposeChangeInternal(ctx, {
+      studentId: student._id,
+      ...(args.courseId ? { courseId: args.courseId } : {}),
+      kind: args.kind,
+      entity: { table, id: entityId },
+      ...(args.before !== undefined ? { before: args.before } : {}),
+      ...(args.after !== undefined ? { after: args.after } : {}),
+      origin: "manual",
+      ...(args.reason ? { reason: args.reason } : {}),
+    })
+    return await approveChangeInternal(ctx, changeId, "web")
+  },
 })
 
 /** Approve a pending change (web tap or an inline chat confirmation). */
