@@ -173,6 +173,29 @@ describe("syllabus pipeline", () => {
 })
 
 describe("change batching", () => {
+  /**
+   * A course belonging to somebody else. A change pointing at it throws in
+   * `assertRefsOwned` on apply — the realistic shape of a row that cannot be
+   * applied, and the one that used to abort a whole page.
+   */
+  const foreignCourse = (t: ReturnType<typeof setupTest>) =>
+    t.run(async (ctx) => {
+      const otherStudentId = await ctx.db.insert("students", {
+        clerkId: `user_stranger_${Math.random().toString(36).slice(2)}`,
+        timezone: NY,
+        classBlocks: [],
+        availability: { weekly: [], exceptions: [] },
+        status: "active",
+      })
+      return await ctx.db.insert("courses", {
+        studentId: otherStudentId,
+        name: "Someone else's course",
+        sourceRefs: {},
+        status: "active",
+        provenance: { source: "manual", sourceRef: "test", confidence: 1 },
+      })
+    })
+
   test("one run stamps one batchId on every change it proposes", async () => {
     const t = setupTest()
     const s = await seed(t, {
@@ -346,25 +369,9 @@ describe("change batching", () => {
     const s = await seed(t, { kind: "syllabus", timezone: NY })
     const batchId = `${s.sourceId}:mixed`
 
-    // A course id from ANOTHER student on the failing row: `assertRefsOwned`
-    // throws on apply, which is exactly the shape that used to abort the whole
-    // page transaction and never schedule the continuation.
-    const foreignCourseId = await t.run(async (ctx) => {
-      const otherStudentId = await ctx.db.insert("students", {
-        clerkId: "user_mixed_stranger",
-        timezone: NY,
-        classBlocks: [],
-        availability: { weekly: [], exceptions: [] },
-        status: "active",
-      })
-      return await ctx.db.insert("courses", {
-        studentId: otherStudentId,
-        name: "Someone else's course",
-        sourceRefs: {},
-        status: "active",
-        provenance: { source: "manual", sourceRef: "test", confidence: 1 },
-      })
-    })
+    // A course id from ANOTHER student on the failing row — the shape that used
+    // to abort the whole page transaction and never schedule the continuation.
+    const foreignCourseId = await foreignCourse(t)
 
     const good = 4
     await t.run(async (ctx) => {
@@ -408,11 +415,117 @@ describe("change batching", () => {
     const rows = await changesOf(t, s.studentId)
     const failed = rows.find((c) => c.kind === "task_created")
     expect(failed?.status).toBe("pending")
+    // It carries WHY, so the card can say "couldn't apply: …" rather than
+    // sitting there looking like an ordinary unanswered question.
+    expect(failed?.applyError?.message).toMatch(/403/)
     expect(
       rows.filter((c) => c.kind === "other").every((c) => c.status === "approved")
     ).toBe(true)
     // And its write rolled back — no task was created from the half-applied row.
     expect(await t.run(async (ctx) => ctx.db.query("tasks").take(5))).toEqual([])
+  })
+
+  test("a whole page of failures does not block the rows behind it", async () => {
+    const t = setupTest()
+    const s = await seed(t, { kind: "syllabus", timezone: NY })
+    const batchId = `${s.sourceId}:allfail`
+    const foreignCourseId = await foreignCourse(t)
+
+    // Exactly one full page of rows that cannot apply, then good ones behind
+    // them. Skipping errors AFTER the index read would stop here and report
+    // the batch complete; they have to leave the range instead.
+    const bad = 200
+    const good = 5
+    await t.run(async (ctx) => {
+      for (let i = 0; i < bad; i++) {
+        await ctx.db.insert("changes", {
+          studentId: s.studentId,
+          kind: "task_created",
+          entity: { table: "tasks" },
+          after: { title: `bad ${i}`, courseId: foreignCourseId },
+          origin: "syllabus",
+          tier: "needs_approval",
+          status: "pending",
+          snapshotIds: [],
+          batchId,
+          createdAt: 1_700_000_000_000 + i,
+        })
+      }
+      for (let i = 0; i < good; i++) {
+        await ctx.db.insert("changes", {
+          studentId: s.studentId,
+          kind: "other",
+          entity: { table: "deadlines" },
+          origin: "syllabus",
+          tier: "needs_approval",
+          status: "pending",
+          snapshotIds: [],
+          batchId,
+          createdAt: 1_700_000_001_000 + i,
+        })
+      }
+    })
+
+    const first = await t
+      .withIdentity({ subject: s.clerkId })
+      .mutation(api.changes.approveMany, { batchId, via: "web" })
+    expect(first).toEqual({ approved: 0, skipped: bad, continued: true })
+
+    vi.useFakeTimers()
+    try {
+      await t.finishAllScheduledFunctions(vi.runAllTimers)
+    } finally {
+      vi.useRealTimers()
+    }
+
+    const rows = await t.run(async (ctx) => ctx.db.query("changes").take(1000))
+    expect(rows.filter((c) => c.status === "approved")).toHaveLength(good)
+    // The failures are still pending and still carry their reason.
+    const failed = rows.filter((c) => c.applyError !== undefined)
+    expect(failed).toHaveLength(bad)
+    expect(failed.every((c) => c.status === "pending")).toBe(true)
+  })
+
+  test("approving a failed row after fixing the cause clears its error", async () => {
+    const t = setupTest()
+    const s = await seed(t, { kind: "syllabus", timezone: NY })
+    const batchId = `${s.sourceId}:recover`
+    const foreignCourseId = await foreignCourse(t)
+    const as = t.withIdentity({ subject: s.clerkId })
+
+    const changeId = await t.run(async (ctx) =>
+      ctx.db.insert("changes", {
+        studentId: s.studentId,
+        kind: "task_created",
+        entity: { table: "tasks" },
+        after: { title: "Read ch. 3", courseId: foreignCourseId },
+        origin: "syllabus",
+        tier: "needs_approval",
+        status: "pending",
+        snapshotIds: [],
+        batchId,
+        createdAt: 1_700_000_000_000,
+      })
+    )
+
+    await as.mutation(api.changes.approveMany, { batchId, via: "web" })
+    expect(
+      (await t.run((ctx) => ctx.db.get("changes", changeId)))?.applyError
+    ).toBeDefined()
+
+    // The cause is fixed — the task now points at the student's own course —
+    // and the student approves the surviving card on its own.
+    await t.run(async (ctx) =>
+      ctx.db.patch("changes", changeId, {
+        after: { title: "Read ch. 3", courseId: s.courseId },
+      })
+    )
+    const result = await as.mutation(api.changes.approve, { changeId, via: "web" })
+    expect(result.status).toBe("approved")
+
+    const change = await t.run((ctx) => ctx.db.get("changes", changeId))
+    expect(change?.applyError).toBeUndefined()
+    expect(await t.run(async (ctx) => ctx.db.query("tasks").take(5))).toHaveLength(1)
   })
 
   test("rows sharing a creation time are not skipped", async () => {

@@ -193,6 +193,14 @@ export async function approveChangeInternal(
   })
   const fresh = await ctx.db.get("changes", changeId)
   if (fresh) await applyChange(ctx, fresh)
+  // Cleared only once the apply above has actually gone through: a row that
+  // failed in a batch drain and is later approved on its own — after the
+  // student fixed whatever the message named — stops carrying a stale error.
+  // If `applyChange` throws, this line is never reached and the whole approval
+  // rolls back, error and all.
+  if (change.applyError) {
+    await ctx.db.patch("changes", changeId, { applyError: undefined })
+  }
   return { changeId, status: "approved" }
 }
 

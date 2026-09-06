@@ -403,6 +403,13 @@ export const changeFields = {
   resolvedVia: v.optional(resolvedViaV),
   /** Present iff the change was approved via `confirmedInline`. */
   evidence: v.optional(inlineEvidenceV),
+  /**
+   * Why this change could not be applied on its last attempt. Bookkeeping, NOT
+   * a status: the row stays `pending`, so the student's card survives and can
+   * say "couldn't apply: …" instead of vanishing. Set by the batch drain when
+   * one row's apply throws, and cleared the moment an approval succeeds.
+   */
+  applyError: v.optional(v.object({ message: v.string(), at: v.number() })),
 }
 
 export const sourceFields = {

@@ -356,12 +356,15 @@ export const expireStale = internalMutation({
  * One page of a batch drain: approve up to `BATCH_PAGE` still-pending changes
  * from this run, and say whether there is more.
  *
- * The range is `(studentId, "pending", batchId)`. Student first, so a
- * caller-supplied batch id can never select across tenants however it is
- * spelled. `status` before `batchId` is what makes the drain terminate without
- * a cursor: approving a row moves it out of the very range being read, so each
- * pass is strictly smaller than the last and a full page always means real
- * remaining work. A `_creationTime` cursor over the whole pending index — the
+ * The range is `(studentId, "pending", batchId, applyError: undefined)`.
+ * Student first, so a caller-supplied batch id can never select across tenants
+ * however it is spelled. The last two columns are what make the drain both
+ * terminate and finish without a cursor: an approved row changes `status` and a
+ * row that throws on apply gets an `applyError`, so EVERY row the page touches
+ * leaves the range. Each pass is therefore strictly further on, a full page
+ * always means real remaining work, and rows sitting behind failures are still
+ * reached — where filtering errors out after the read would let a page of them
+ * block the drain. A `_creationTime` cursor over the whole pending index — the
  * first shape of this — could skip rows sharing a creation time, and could spin
  * on a full page that happened to contain none of the batch.
  */
@@ -398,8 +401,12 @@ async function approveBatchPage(
 ): Promise<{ approved: number; skipped: number; more: boolean }> {
   const rows = await ctx.db
     .query("changes")
-    .withIndex("by_student_status_batchId", (q) =>
-      q.eq("studentId", studentId).eq("status", "pending").eq("batchId", batchId)
+    .withIndex("by_student_status_batchId_applyError", (q) =>
+      q
+        .eq("studentId", studentId)
+        .eq("status", "pending")
+        .eq("batchId", batchId)
+        .eq("applyError", undefined)
     )
     .take(BATCH_PAGE)
 
@@ -413,24 +420,28 @@ async function approveBatchPage(
       await ctx.runMutation(internal.changes.approveOne, { changeId, via })
       approved++
     } catch (error) {
-      // LEFT PENDING, deliberately. The alternative — auto-rejecting the row
-      // with the error as its reason — destroys a card the student never
-      // decided on because a neighbour in the same parse failed. Pending is
-      // recoverable: the row stays in the queue, the student can approve it
-      // alone and see the real error, and the nightly expiry still sweeps it if
-      // it is never resolved.
+      // LEFT PENDING, deliberately. The alternative — auto-rejecting the row —
+      // destroys a card the student never decided on because a neighbour in the
+      // same parse failed. Pending is recoverable: the row stays in the queue
+      // carrying WHY it could not apply, the student can fix the cause and
+      // approve it alone (which clears the error), and the nightly expiry still
+      // sweeps it if it is never resolved.
+      const message = error instanceof Error ? error.message : String(error)
+      await ctx.db.patch("changes", changeId, {
+        applyError: { message: message.slice(0, 500), at: Date.now() },
+      })
       skipped++
       console.error(
         `changes.approveBatchPage: ${changeId} in batch ${batchId} failed to apply; ` +
-          `left pending. ${error instanceof Error ? error.message : String(error)}`
+          `left pending. ${message}`
       )
     }
   }
 
-  // Continue only while the page was full AND something actually left the
-  // range. Rows that failed stay pending at the front of it, so a page that
-  // approves nothing would otherwise re-read the same failures forever.
-  return { approved, skipped, more: ids.length === BATCH_PAGE && approved > 0 }
+  // Every row above left the range — approved ones by their status, failed ones
+  // by their `applyError` — so a full page always means there is more behind it
+  // and the next pass starts past both.
+  return { approved, skipped, more: ids.length === BATCH_PAGE }
 }
 
 /**
