@@ -385,8 +385,15 @@ function UploadSection({
       current.map((row) => (row.id === id ? { ...row, ...next } : row))
     )
 
+  /* A schedule is ONE reused source. Picking another file while the current one
+   * is still uploading or parsing would start a second extraction on the same
+   * source, and the first one's completion would then read as the second's
+   * ("Parsed" before it is). So the picker closes until the current row settles. */
+  const scheduleInFlight =
+    kind === "schedule" && rows.some((r) => r.status === "uploading" || r.status === "parsing")
+
   const onPick = (files: FileList | null) => {
-    if (!files) return
+    if (!files || scheduleInFlight) return
     const picked = Array.from(files).map((file) => ({
       id: `u${++uploadSeq}`,
       file,
@@ -468,6 +475,8 @@ function UploadSection({
           ref={inputRef}
           type="file"
           multiple={kind === "syllabus"}
+          disabled={scheduleInFlight}
+          title={scheduleInFlight ? "Wait for the current schedule to finish parsing" : undefined}
           onChange={(e) => onPick(e.target.files)}
           className="max-w-[14rem] text-[12px] text-ink-2 file:mr-2 file:h-7 file:rounded-full file:border-0 file:bg-inset file:px-2.5 file:text-[12px] file:text-ink file:shadow-hairline"
         />
