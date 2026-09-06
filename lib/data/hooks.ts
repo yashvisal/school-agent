@@ -167,6 +167,7 @@ const TOOL_LABEL: Record<ChangeOrigin, string> = {
   chat: "confirmed in the thread",
   manual: "you fixed it",
   schedule: "parsed schedule",
+  planner: "planned in the thread",
 }
 
 const KIND_LABEL: Record<Doc<"changes">["kind"], string> = {
