@@ -7,7 +7,7 @@ import { internalAction, internalMutation, internalQuery } from "./_generated/se
 import { WARMED_MIN_INBOUND } from "./inbound"
 import type { FeasibleActions } from "./lib/planner"
 import { DEFAULT_HORIZON_DAYS } from "./lib/planner"
-import { localDate, localParts } from "./lib/time"
+import { addDays, localDate, localParts } from "./lib/time"
 import {
   pendingAnnotationV,
   planFeasibleV,
@@ -330,6 +330,11 @@ function shouldRun(
  * idempotent rather than one cron per timezone: timezones are per-student data,
  * not deployment config.
  *
+ * The retry window is measured in the student's local hours and may run past
+ * local midnight, so each tick weighs two candidate student-days — today, and
+ * yesterday when today's morning hour has not arrived yet. At most one is
+ * eligible, and at most one run is scheduled per student per tick.
+ *
  * Each student's run is *scheduled*, not awaited: a slow or hanging eve trigger
  * for one student must not delay or starve the rest of the roster in the same
  * tick (CR 3892161920). `planRuns.operationId` still makes a double tick a no-op.
@@ -356,13 +361,13 @@ export const tick = internalAction({
 
       for (const student of roster.page) {
         let hour: number
-        let date: string
+        let today: string
         try {
           hour = localParts(now, student.timezone).hour
           // Today, not tomorrow: the student is woken with a plan for the day
           // they are starting, and the planner offers only the part of it that
           // is still ahead of them (`windowsForDate` subtracts elapsed minutes).
-          date = localDate(now, student.timezone)
+          today = localDate(now, student.timezone)
         } catch (error) {
           // A data problem, not a reason to stall — but it is recorded, so a
           // student who silently never gets a text is discoverable.
@@ -380,31 +385,53 @@ export const tick = internalAction({
           })
           continue
         }
-        // A first run starts exactly on the student's local morning hour. For
-        // the few hours after it, the pass still *looks* — but only to retry a
-        // run that failed or got stuck, never to start a day's first one late.
         const morningHour = student.morningHourLocal ?? DEFAULT_MORNING_HOUR
-        const hoursSince = hour - morningHour
-        if (hoursSince < 0 || hoursSince > RETRY_WINDOW_HOURS) continue
 
-        const existing: {
-          planRunId: Id<"planRuns">
-          triggerStatus: TriggerStatus
-          computedAt: number
-          voiceSessionId?: string
-          error?: string
-        } | null = await ctx.runQuery(internal.nightly.findRun, {
-          operationId: operationIdFor(student._id, date),
-        })
-        if (hoursSince > 0 && !existing) continue // late tick, nothing to recover
-        if (!shouldRun(existing, now)) continue
+        // Two candidate student-days, because the retry window crosses local
+        // midnight for anyone whose morning hour is late in the day. A student
+        // on `morningHourLocal: 20` who ticks at 01:00 is five hours into
+        // *yesterday's* window, and yesterday's `operationId` names the run that
+        // needs recovering — reading `hour - morningHour` as -19 would skip them
+        // and looking at today's date would recover the wrong run. At most one
+        // candidate is ever eligible: `hoursSince` is negative for today exactly
+        // when the window belongs to yesterday.
+        const hoursSinceToday = hour - morningHour
+        const candidates =
+          hoursSinceToday < 0
+            ? [{ date: addDays(today, -1), hoursSince: hoursSinceToday + 24 }]
+            : [{ date: today, hoursSince: hoursSinceToday }]
 
-        await ctx.scheduler.runAfter(0, internal.nightly.runForStudent, {
-          studentId: student._id,
-          date,
-          now,
-        })
-        started++
+        for (const candidate of candidates) {
+          if (candidate.hoursSince > RETRY_WINDOW_HOURS) continue
+
+          const existing: {
+            planRunId: Id<"planRuns">
+            triggerStatus: TriggerStatus
+            computedAt: number
+            voiceSessionId?: string
+            error?: string
+          } | null = await ctx.runQuery(internal.nightly.findRun, {
+            operationId: operationIdFor(student._id, candidate.date),
+          })
+          // A first run starts exactly on the student's local morning hour, and
+          // only ever for today. Every other eligible tick — later in today's
+          // window, or yesterday's window still open across midnight — is there
+          // to retry a run that failed or got stuck, never to start a day's
+          // first one late. A yesterday candidate in particular must never
+          // manufacture a plan for a day the student has already lived.
+          if (!existing && (candidate.hoursSince > 0 || candidate.date !== today)) {
+            continue
+          }
+          if (!shouldRun(existing, now)) continue
+
+          await ctx.scheduler.runAfter(0, internal.nightly.runForStudent, {
+            studentId: student._id,
+            date: candidate.date,
+            now,
+          })
+          started++
+          break // one scheduled run per tick per student
+        }
       }
 
       if (roster.isDone) break

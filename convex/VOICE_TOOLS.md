@@ -303,6 +303,12 @@ routing; they are silently dropped from the patch. And `entity.id` must be the
 same student as `studentId` — a change can only ever touch its own student, on
 any table. Anything else is a `403`.
 
+`morningHourLocal` must be a **whole hour, `0`-`23`**. `7.5`, `-1`, and `24` are
+each a `400: morningHourLocal must be an integer hour 0–23` — refused outright,
+never rounded or dropped, because a half-hour heard as "half seven" that became
+`7` (or a `24` that became `0`) would text the student at an hour they never
+chose. If you are not certain of the hour, ask; do not guess and propose.
+
 **Response `200`**
 
 ```json
@@ -525,7 +531,12 @@ their morning hour (`morningHourLocal`, default `7`) and who has no plan run for
 **today** yet — plus, for the six hours after that, any student whose run for
 today `failed` or is stuck. The plan is for the day the student is waking into,
 not the day after it, and the planner drops the hours already elapsed, so a 7am
-run never offers a 6am window. For each student it
+run never offers a 6am window. The six-hour window is measured on the student's
+own clock and may run past local midnight: a student on `morningHourLocal: 20`
+whose run failed is still recovered at 01:00 the next day, under *that day's*
+`operationId` — but a window that has crossed midnight only ever retries, and
+never starts a first run for a day the student has already lived. For each
+student it
 expires stale pending changes, computes that day's plan, stores it as a
 `planRuns` row, and then POSTs the **Voice trigger route** — the custom channel
 route `agent/voice/channels/trigger.ts` mounts under `withEve` on the Next

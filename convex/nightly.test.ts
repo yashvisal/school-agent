@@ -26,6 +26,8 @@ const VOICE_URL = "https://voice.example.com"
 
 /** 2026-09-14 is a Monday; the pass runs that morning and plans that same day. */
 const TODAY = "2026-09-14"
+/** Only for the after-midnight ticks: the pass never *plans* a future day. */
+const TOMORROW = "2026-09-15"
 const at = (date: string, minutes: number) => localDateToMs(date, minutes, TZ)
 
 /** 7am local on the 14th — the default morning hour. */
@@ -711,6 +713,67 @@ describe("tick", () => {
     expect(runs[0].triggerStatus).toBe("triggered")
     expect(runs[0].error).toBeUndefined()
     expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  test("a late-evening student's failed run is retried across local midnight", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("nope", { status: 500 }))
+    const t = setupTest()
+    const { studentId } = await seed(t, { morningHourLocal: 20 })
+
+    await t.action(internal.nightly.tick, { now: at(TODAY, 20 * 60) })
+    await drain(t)
+    const failed = await runsFor(t)
+    expect(failed).toHaveLength(1)
+    expect(failed[0].date).toBe(TODAY)
+    expect(failed[0].triggerStatus).toBe("failed")
+
+    // 01:00 the next day is five hours into the window that opened at 20:00 —
+    // still yesterday's run, under yesterday's operationId. Reading the offset
+    // as `1 - 20` would abandon this student every night.
+    const second = await t.action(internal.nightly.tick, {
+      now: at(TOMORROW, 60),
+    })
+    await drain(t)
+
+    expect(second.started).toBe(1)
+    const runs = await runsFor(t)
+    expect(runs).toHaveLength(1)
+    expect(runs[0].operationId).toBe(operationIdFor(studentId, TODAY))
+    expect(runs[0].triggerStatus).toBe("triggered")
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  test("a tick after midnight never starts a first run for the day just ended", async () => {
+    const t = setupTest()
+    await seed(t, { morningHourLocal: 20 })
+
+    // Nothing failed, because nothing ever ran: the 20:00 tick was missed. The
+    // recovery window recovers; it does not manufacture a plan for a day the
+    // student has already lived.
+    const result = await t.action(internal.nightly.tick, { now: at(TOMORROW, 60) })
+    await drain(t)
+
+    expect(result).toEqual({ considered: 1, started: 0 })
+    expect(await runsFor(t)).toHaveLength(0)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  test("the midnight-crossing window leaves a plain 7am student alone", async () => {
+    const t = setupTest()
+    await seed(t)
+
+    // 01:00 is nineteen hours short of this student's next morning hour and six
+    // hours past the last one — outside the window at both ends.
+    expect(
+      await t.action(internal.nightly.tick, { now: at(TOMORROW, 60) })
+    ).toEqual({ considered: 1, started: 0 })
+    expect(await runsFor(t)).toHaveLength(0)
+
+    // Their own 7am still starts a run, dated that day.
+    const own = await t.action(internal.nightly.tick, { now: MORNING_NOW })
+    await drain(t)
+    expect(own.started).toBe(1)
+    expect((await runsFor(t))[0].date).toBe(TODAY)
   })
 
   test("a warming-gate skip is retried once the student warms", async () => {
