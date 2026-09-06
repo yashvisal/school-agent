@@ -31,11 +31,24 @@ const pickSchema = z
       ),
     endMin: z.number().int().describe("Block end, minutes from local midnight."),
   })
-  // One complete identity, checked here so the model is told what is wrong
-  // before Core has to say it — Core enforces the same rule independently.
-  .refine((pick) => Boolean(pick.taskId || pick.deadlineId || (pick.title && pick.courseId)), {
-    message:
-      "Each pick needs exactly one complete identity: the option's taskId, else its deadlineId, else its title AND courseId together.",
+  // EXACTLY one complete identity, checked here so the model is told what is
+  // wrong before Core has to say it — Core enforces the same rule independently.
+  // More than one is not redundancy: a taskId and a deadlineId that disagree
+  // would be resolved by precedence rather than raised as the contradiction it is.
+  .refine(
+    (pick) =>
+      [
+        pick.taskId !== undefined,
+        pick.deadlineId !== undefined,
+        pick.title !== undefined || pick.courseId !== undefined,
+      ].filter(Boolean).length === 1,
+    {
+      message:
+        "Each pick needs exactly ONE identity: the option's taskId, or its deadlineId, or its title AND courseId together — never a mix.",
+    },
+  )
+  .refine((pick) => !(pick.title !== undefined || pick.courseId !== undefined) || Boolean(pick.title && pick.courseId), {
+    message: "Free-standing work needs title AND courseId together, not one of them.",
   })
   .refine((pick) => pick.endMin > pick.startMin, {
     message: "endMin must be after startMin.",
