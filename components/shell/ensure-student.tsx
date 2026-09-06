@@ -62,7 +62,13 @@ export function EnsureStudent() {
     setRetrying(false)
   }
 
-  if (!error) return null
+  /* The viewer appearing IS the success condition, whoever caused it — this
+   * component's own retry, or another tab that provisioned the row first. So
+   * the banner is gated on the row still being missing rather than on the last
+   * error we happened to see; a stale error can never outlive the problem it
+   * described. (Gated rather than cleared in an effect: setting state from an
+   * effect is the re-render loop the lint rule exists to stop.) */
+  if (!error || viewer !== null) return null
   /* Silent failure here means every page looks like an empty semester, which
    * is indistinguishable from a new account with no sources. Say so, and offer
    * the retry in place rather than making a reload the only way out. */
