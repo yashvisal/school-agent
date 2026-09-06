@@ -407,9 +407,15 @@ Each pick carries **exactly one complete identity**, taken from §3 in this orde
 2. else `deadlineId`;
 3. else `title` **and** `courseId` together, for free-standing work with neither id.
 
-A half-named pick — a `title` with no `courseId`, or nothing at all — is a `400`
-naming it. That is a different error from "matches nothing in the feasible set",
-and says so.
+Send **one** of those three, never a mix. A half-named pick (a `title` with no
+`courseId`, or nothing at all) and an over-named one (a `taskId` *and* a
+`deadlineId`) are both a `400` naming the pick. Over-naming is refused even when
+the two ids agree: they are matched in a fixed order, so a pick whose ids
+disagree would silently plan one and ignore the other — a contradiction resolved
+by precedence instead of raised. Dropping the redundant id costs nothing.
+
+Either way the error says which mistake it was, distinct from "matches nothing in
+the feasible set".
 
 `startMin`/`endMin` are minutes from local midnight and describe the block you
 told the student about. Do not round them, shift them, or make them up.

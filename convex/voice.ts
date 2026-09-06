@@ -248,9 +248,6 @@ export const planPickV = v.object({
 /** The morning text names 1–3 things. A "plan" longer than that is a list. */
 export const MAX_PICKS = 3
 
-/** Bound on the unplan sweep; a semester is a few hundred tasks. */
-const MAX_TASK_SCAN = 1000
-
 /**
  * `origin` is not a caller choice here either. `commitPlan` is the ONLY thing in
  * Core that emits `planner`, and it does so having just re-verified every pick
@@ -272,18 +269,37 @@ const describePick = (pick: PlanPick, option?: PlanOption): string => {
 }
 
 /**
- * A pick must carry exactly one complete identity. Reported separately from "no
- * such option", because they are different mistakes: a half-named pick (a bare
- * `title` with no `courseId`) is a malformed request, and saying it "matches
- * nothing in the feasible set" would send the agent looking for the wrong bug.
+ * A pick must carry EXACTLY one complete identity. Reported separately from "no
+ * such option", because they are different mistakes: a malformed pick is a bad
+ * request, and saying it "matches nothing in the feasible set" would send the
+ * reader looking for the wrong bug.
+ *
+ * Both directions matter. Too few is obvious. Too many is worse: `matchOption`
+ * resolves in a fixed order, so a pick carrying a `taskId` AND a `deadlineId`
+ * that disagree would silently plan the task and ignore the deadline — the
+ * agent's own contradiction, resolved by precedence instead of raised. The two
+ * ids are only redundant when they already agree, and then dropping one costs
+ * nothing.
  */
 function identityProblem(pick: PlanPick): string | null {
-  if (pick.taskId || pick.deadlineId) return null
-  if (pick.title && pick.courseId) return null
-  if (pick.title || pick.courseId) {
-    return "names work by title without a courseId (or the other way round); free-standing work needs both"
+  const variants = [
+    pick.taskId !== undefined,
+    pick.deadlineId !== undefined,
+    pick.title !== undefined || pick.courseId !== undefined,
+  ].filter(Boolean).length
+
+  if (variants > 1) {
+    return "supplies more than one identity — use taskId, or deadlineId, or title + courseId"
   }
-  return "identifies no work: give a taskId, else a deadlineId, else title + courseId"
+  if (variants === 0) {
+    return "identifies no work: give a taskId, else a deadlineId, else title + courseId"
+  }
+  if (pick.title !== undefined || pick.courseId !== undefined) {
+    if (!pick.title || !pick.courseId) {
+      return "names work by title without a courseId (or the other way round); free-standing work needs both"
+    }
+  }
+  return null
 }
 
 /**
@@ -581,14 +597,21 @@ export const commitPlan = internalMutation({
     // stops being planned. Only work the agent itself put on the day, and only
     // while it is still open — a done or skipped task's planned day is a record
     // of what happened, not a plan to revise.
+    //
+    // Read through `by_student_plannedFor`, so this is EXACTLY the tasks on that
+    // day rather than a capped scan of the student's tasks filtered afterwards:
+    // a student with a semester of history would have had a dropped task fall
+    // behind the cap and silently keep its stale block. One day's plan is a
+    // handful of rows by construction, so it collects.
     const tasks = await ctx.db
       .query("tasks")
-      .withIndex("by_student_status", (q) => q.eq("studentId", args.studentId))
-      .take(MAX_TASK_SCAN)
+      .withIndex("by_student_plannedFor", (q) =>
+        q.eq("studentId", args.studentId).eq("plannedFor", args.date)
+      )
+      .collect()
 
     let unplanned = 0
     for (const task of tasks) {
-      if (task.plannedFor !== args.date) continue
       if (task.createdBy !== "agent") continue
       if (task.status !== "todo" && task.status !== "in_progress") continue
       if (kept.has(task._id)) continue

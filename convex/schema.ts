@@ -47,6 +47,11 @@ export default defineSchema({
 
   tasks: defineTable(taskFields)
     .index("by_student_status", ["studentId", "status"])
+    // "what is planned on this day?" — `commitPlan` is authoritative for its
+    // date and must see EVERY task planned on it to unplan the ones it dropped.
+    // Scanning the student's tasks and filtering would silently miss one behind
+    // a `take()` cap and leave a stale block on the day.
+    .index("by_student_plannedFor", ["studentId", "plannedFor"])
     .index("by_deadline", ["deadlineId"]),
 
   changes: defineTable(changeFields)

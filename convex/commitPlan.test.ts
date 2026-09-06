@@ -409,6 +409,48 @@ describe("verification", () => {
     expect(changes).toHaveLength(0)
   })
 
+  test("a pick carrying more than one identity is refused", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    const deadlineId = await addDeadline(t, seeded)
+    const taskId = await t.run(async (ctx) =>
+      ctx.db.insert("tasks", {
+        studentId: seeded.studentId,
+        courseId: seeded.courseId,
+        deadlineId,
+        title: "Pset 3",
+        type: "do",
+        status: "todo",
+        createdBy: "agent",
+      })
+    )
+    const other = await addDeadline(t, seeded, {
+      title: "Pset 4",
+      externalIds: { canvasAssignmentId: "5002" },
+    })
+
+    // `matchOption` resolves ids in a fixed order, so a pick naming a task AND a
+    // different deadline would silently plan the task. That contradiction is the
+    // agent's, and it gets raised rather than resolved by precedence.
+    await expect(
+      commit(t, seeded.studentId, [{ taskId, deadlineId: other, ...AFTERNOON }])
+    ).rejects.toThrow(/supplies more than one identity/)
+
+    // Even when they agree: redundancy costs nothing to drop.
+    await expect(
+      commit(t, seeded.studentId, [{ taskId, deadlineId, ...AFTERNOON }])
+    ).rejects.toThrow(/supplies more than one identity/)
+
+    await expect(
+      commit(t, seeded.studentId, [
+        { deadlineId, title: "Pset 3", courseId: seeded.courseId, ...AFTERNOON },
+      ])
+    ).rejects.toThrow(/supplies more than one identity/)
+
+    const { changes } = await counts(t, seeded.studentId)
+    expect(changes).toHaveLength(0)
+  })
+
   test("the same work twice in one commit is refused", async () => {
     const t = setupTest()
     const seeded = await seed(t)
@@ -457,6 +499,41 @@ describe("a commit replaces the day", () => {
       origin: "planner",
       reason: `unplanned for ${DATE} — replaced by the plan committed in the thread`,
     })
+  })
+
+  test("a dropped task is found behind a semester of other tasks", async () => {
+    const t = setupTest()
+    const seeded = await seed(t)
+    const first = await addDeadline(t, seeded)
+    const second = await addDeadline(t, seeded, {
+      title: "Pset 4",
+      externalIds: { canvasAssignmentId: "5002" },
+    })
+
+    const one = await commit(t, seeded.studentId, [{ deadlineId: first, ...MORNING }])
+    const droppedTaskId = one.committed[0].taskId
+
+    // Bury it. A capped scan of the student's tasks would not reach the row
+    // planned for this date, and it would keep its stale block forever.
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 1200; i++) {
+        await ctx.db.insert("tasks", {
+          studentId: seeded.studentId,
+          courseId: seeded.courseId,
+          title: `old task ${i}`,
+          type: "do",
+          status: "done",
+          plannedFor: "2026-08-20",
+          createdBy: "agent",
+        })
+      }
+    })
+
+    const two = await commit(t, seeded.studentId, [{ deadlineId: second, ...AFTERNOON }])
+    expect(two.unplanned).toBe(1)
+
+    const dropped = await t.run((ctx) => ctx.db.get("tasks", droppedTaskId))
+    expect(dropped?.plannedFor).toBeUndefined()
   })
 
   test("a task the student made themselves is never touched", async () => {
