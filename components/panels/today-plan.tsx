@@ -16,6 +16,16 @@ import type { Course, Deadline, Task } from "@/lib/data/types"
  * prior it is (core.md "Effort estimates").
  */
 
+/**
+ * A deadline in one of these states has no work left in it. Core resolves the
+ * DEADLINE — `onboarding.resolvePastDeadlines`, a Canvas submission diff — and
+ * does not cascade to the `tasks` that serve it, so a `todo` task would go on
+ * sitting in Today for work the student has already said is done. Filtering
+ * here is the honest read of the two facts together; a cascade in Core would
+ * be better and is not Face's to write.
+ */
+const SETTLED_SUBMISSION = new Set(["submitted", "graded", "excused", "missing"])
+
 const STATUS: Record<Task["status"], TaskRow["status"]> = {
   done: "done",
   in_progress: "running",
@@ -52,6 +62,13 @@ export function TodayPlan({
     return tasks
       .filter((t) => (courseId ? t.courseId === courseId : true))
       .filter((t) => t.plannedFor !== undefined && daysAway(t.plannedFor) === 0)
+      .filter((t) => {
+        const deadline = t.deadlineId ? deadlineById.get(t.deadlineId) : undefined
+        return !(
+          deadline?.submissionStatus !== undefined &&
+          SETTLED_SUBMISSION.has(deadline.submissionStatus)
+        )
+      })
       .sort((a, b) => (a.plannedFor ?? "").localeCompare(b.plannedFor ?? ""))
       .map((task, i) => {
         const course = task.courseId ? courseById.get(task.courseId) : undefined
