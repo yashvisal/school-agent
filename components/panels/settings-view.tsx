@@ -174,8 +174,10 @@ function useUpdatePrefs() {
           onDone?.(result.changed) ??
             (result.changed.length === 0 ? "Nothing changed." : "Saved.")
         )
+        return true
       } catch (cause) {
         setError(errorMessage(cause))
+        return false
       } finally {
         setSaving(false)
       }
@@ -230,10 +232,15 @@ function ThreadSection({ viewer }: { viewer: Viewer | undefined }) {
   const [retryFrom, setRetryFrom] = React.useState<number | null>(null)
   const retrying = retryFrom !== null && (registration?.at ?? 0) === retryFrom
 
-  const onRetry = () => {
+  const onRetry = async () => {
     if (!viewer?.phone) return
     setRetryFrom(registration?.at ?? 0)
-    void save({ phone: viewer.phone }, () => "Sent to the texting line again.")
+    const ok = await save({ phone: viewer.phone }, () => "Sent to the texting line again.")
+    // A rejected retry never scheduled anything, so leaving the note at
+    // "Registering…" alongside the save error would contradict itself. Cleared
+    // here rather than in an effect on `error`: setting state from an effect is
+    // exactly the re-render loop the lint rule exists to stop.
+    if (!ok) setRetryFrom(null)
   }
 
   return (
@@ -370,7 +377,7 @@ function RegistrationNote({
           <span className="min-w-0 flex-1 text-[12.5px] leading-relaxed text-ink-2">
             Couldn&apos;t register: {registration.error ?? "unknown error"}.
           </span>
-          <Button size="xs" variant="secondary" onClick={onRetry}>
+          <Button size="xs" variant="secondary" onClick={() => void onRetry()}>
             Retry
           </Button>
         </>
@@ -490,18 +497,21 @@ function TermSection({ viewer }: { viewer: Viewer | undefined }) {
   const [start, setStart] = useDraft(viewer?.semesterStart ?? "")
   const [end, setEnd] = useDraft(viewer?.semesterEnd ?? "")
 
-  const dirty =
-    zone !== serverZone ||
-    start !== (viewer?.semesterStart ?? "") ||
-    end !== (viewer?.semesterEnd ?? "")
+  /* Emptying a date is not an edit this form can make: `updatePrefs` has no
+   * way to clear `semesterStart`/`semesterEnd` (an absent argument means "not
+   * touched", and an empty string fails its date check). So a cleared field is
+   * not dirty — otherwise Save lights up, sends nothing, and reports "Nothing
+   * changed". The field repopulating from the server on the next save is the
+   * correct outcome, not a bug. */
+  const startMoved = start !== "" && start !== (viewer?.semesterStart ?? "")
+  const endMoved = end !== "" && end !== (viewer?.semesterEnd ?? "")
+  const dirty = zone !== serverZone || startMoved || endMoved
 
   const onSave = () => {
     void save({
       ...(zone !== serverZone ? { timezone: zone } : {}),
-      ...(start && start !== (viewer?.semesterStart ?? "")
-        ? { semesterStart: start }
-        : {}),
-      ...(end && end !== (viewer?.semesterEnd ?? "") ? { semesterEnd: end } : {}),
+      ...(startMoved ? { semesterStart: start } : {}),
+      ...(endMoved ? { semesterEnd: end } : {}),
     })
   }
 
