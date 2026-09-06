@@ -43,6 +43,8 @@ export type ProposeChangeInput = {
   snapshotIds?: Id<"snapshots">[]
   reason?: string
   conflict?: boolean
+  /** One extraction run's id, so the queue can approve a whole parse at once. */
+  batchId?: string
   /** The student confirmed this in the same chat exchange it was born in. */
   confirmedInline?: boolean
   /** REQUIRED with `confirmedInline`: what the student actually said. */
@@ -155,6 +157,7 @@ export async function proposeChangeInternal(
     snapshotIds: input.snapshotIds ?? [],
     reason: input.reason,
     conflict: input.conflict,
+    batchId: input.batchId,
     createdAt: now,
     resolvedAt: status === "pending" ? undefined : now,
     resolvedVia,

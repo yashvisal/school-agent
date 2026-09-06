@@ -172,6 +172,132 @@ describe("syllabus pipeline", () => {
   })
 })
 
+describe("change batching", () => {
+  test("one run stamps one batchId on every change it proposes", async () => {
+    const t = setupTest()
+    const s = await seed(t, {
+      kind: "syllabus",
+      timezone: LA,
+      semester: { start: "2025-03-31", end: "2025-06-11" },
+    })
+    const result = await ingestSyllabus(t, s)
+
+    const changes = await changesOf(t, s.studentId)
+    expect(changes).toHaveLength(5)
+    const batchIds = new Set(changes.map((c) => c.batchId))
+    // One card in the queue, not five.
+    expect(batchIds.size).toBe(1)
+    // Keyed on the run's stored artifact, so it is traceable to the document.
+    expect([...batchIds][0]).toBe(`${s.sourceId}:${result.snapshotId}`)
+  })
+
+  test("a forced re-parse of the same document stays in the same batch", async () => {
+    const t = setupTest()
+    const s = await seed(t, {
+      kind: "syllabus",
+      timezone: LA,
+      semester: { start: "2025-03-31", end: "2025-06-11" },
+    })
+    await ingestSyllabus(t, s)
+    await ingestSyllabus(t, s, { force: true })
+
+    const batchIds = new Set((await changesOf(t, s.studentId)).map((c) => c.batchId))
+    expect(batchIds.size).toBe(1)
+  })
+
+  test("a schedule upload's change carries a batchId too", async () => {
+    const t = setupTest()
+    const s = await seed(t, { kind: "schedule", timezone: NY })
+    const result = await t.mutation(internal.ingest.extracted.ingestSchedule, {
+      sourceId: s.sourceId,
+      payload: { kind: "schedule", fetchedAt: 1, markdown: "# grid" },
+      contentHash: "hash-grid",
+      extraction: scheduleExpected,
+    })
+
+    const changes = await changesOf(t, s.studentId)
+    expect(changes).toHaveLength(1)
+    expect(changes[0].batchId).toBe(`${s.sourceId}:${result.snapshotId}`)
+  })
+
+  test("approveMany({ batchId }) approves the run, and only the caller's rows", async () => {
+    const t = setupTest()
+    const s = await seed(t, {
+      kind: "syllabus",
+      timezone: LA,
+      semester: { start: "2025-03-31", end: "2025-06-11" },
+    })
+    const result = await ingestSyllabus(t, s)
+    const batchId = `${s.sourceId}:${result.snapshotId}`
+
+    // A stranger's pending change carrying the SAME batch id: a batch id is a
+    // client-supplied string, so it must never be a cross-tenant selector.
+    const foreign = await t.run(async (ctx) => {
+      const otherStudentId = await ctx.db.insert("students", {
+        clerkId: "user_batch_stranger",
+        timezone: NY,
+        classBlocks: [],
+        availability: { weekly: [], exceptions: [] },
+        status: "active",
+      })
+      return await ctx.db.insert("changes", {
+        studentId: otherStudentId,
+        kind: "deadline_added",
+        entity: { table: "deadlines" },
+        origin: "syllabus",
+        tier: "needs_approval",
+        status: "pending",
+        snapshotIds: [],
+        batchId,
+        createdAt: Date.now(),
+      })
+    })
+
+    // A change from outside the batch, to prove the filter bites.
+    const unrelated = await t.mutation(internal.changes.propose, {
+      studentId: s.studentId,
+      courseId: s.courseId,
+      kind: "deadline_updated",
+      entity: { table: "deadlines" },
+      after: { title: "unrelated" },
+      origin: "site",
+    })
+
+    const outcome = await t
+      .withIdentity({ subject: s.clerkId })
+      .mutation(api.changes.approveMany, { batchId, via: "web" })
+    expect(outcome.approved).toBe(5)
+
+    const mine = await changesOf(t, s.studentId)
+    for (const change of mine) {
+      expect(change.status).toBe(change.batchId === batchId ? "approved" : "pending")
+    }
+    expect((await t.run((ctx) => ctx.db.get("changes", unrelated.changeId)))?.status).toBe(
+      "pending"
+    )
+    expect((await t.run((ctx) => ctx.db.get("changes", foreign)))?.status).toBe("pending")
+
+    // Idempotent: a second tap finds nothing left to approve.
+    const again = await t
+      .withIdentity({ subject: s.clerkId })
+      .mutation(api.changes.approveMany, { batchId, via: "web" })
+    expect(again.approved).toBe(0)
+  })
+
+  test("approveMany refuses being handed both selectors, or neither", async () => {
+    const t = setupTest()
+    const s = await seed(t, { kind: "syllabus", timezone: LA })
+    const as = t.withIdentity({ subject: s.clerkId })
+
+    await expect(
+      as.mutation(api.changes.approveMany, { changeIds: [], batchId: "b", via: "web" })
+    ).rejects.toThrow(/400/)
+    await expect(as.mutation(api.changes.approveMany, { via: "web" })).rejects.toThrow(
+      /400/
+    )
+  })
+})
+
 describe("dedupe and conflict against existing deadlines", () => {
   const withExisting = async (title: string, dueAt?: number) => {
     const t = setupTest()

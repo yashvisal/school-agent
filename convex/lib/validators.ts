@@ -389,6 +389,15 @@ export const changeFields = {
   snapshotIds: v.array(v.id("snapshots")),
   reason: v.optional(v.string()),
   conflict: v.optional(v.boolean()),
+  /**
+   * One extraction run's worth of changes, so the web queue can show and
+   * approve a whole parse as one card ("18 items from CHEM 202's syllabus")
+   * instead of eighteen. `${sourceId}:${snapshotId}` — the snapshot IS the run's
+   * stored artifact, so a forced re-parse of the same document reuses the same
+   * batch rather than fracturing the card in two. Absent on changes that were
+   * not part of a run (chat, manual, a single Canvas diff).
+   */
+  batchId: v.optional(v.string()),
   createdAt: v.number(),
   resolvedAt: v.optional(v.number()),
   resolvedVia: v.optional(resolvedViaV),

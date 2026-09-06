@@ -185,6 +185,8 @@ export type ApplyProposalsInput = {
   courseIds: Map<string, Id<"courses">>
   /** Course used for deadlines whose feed does not name one. */
   fallbackCourseId?: Id<"courses">
+  /** Stamped on every change this run writes, so the queue can group them. */
+  batchId?: string
 }
 
 export type ApplyProposalsResult = {
@@ -285,6 +287,7 @@ export async function applyProposals(
       ...(after !== undefined ? { after } : {}),
       origin: input.origin,
       snapshotIds: input.snapshotIds,
+      ...(input.batchId ? { batchId: input.batchId } : {}),
       ...(proposal.reason ? { reason: proposal.reason } : {}),
       ...(proposal.conflict ? { conflict: true } : {}),
     })

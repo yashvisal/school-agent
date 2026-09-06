@@ -1,6 +1,7 @@
 import { paginationOptsValidator } from "convex/server"
 import { v } from "convex/values"
 
+import type { MutationCtx } from "./_generated/server"
 import { internalMutation, mutation, query } from "./_generated/server"
 import { getCurrentStudent, requireStudent } from "./lib/auth"
 import type { Id } from "./_generated/dataModel"
@@ -48,6 +49,7 @@ export const propose = internalMutation({
     snapshotIds: v.optional(v.array(v.id("snapshots"))),
     reason: v.optional(v.string()),
     conflict: v.optional(v.boolean()),
+    batchId: v.optional(v.string()),
     confirmedInline: v.optional(v.boolean()),
     evidence: v.optional(inlineEvidenceV),
   },
@@ -181,22 +183,40 @@ export const approve = mutation({
  * syllabus/site parses, approved in one gesture). Same semantics as `approve`,
  * per row; already-resolved rows are counted as skipped, not errors, so a
  * double-tap is harmless.
+ *
+ * Two ways to name the set. `changeIds` is the explicit one (the student ticked
+ * rows); `batchId` approves everything still pending from one extraction run,
+ * which is what the "18 items from CHEM 202's syllabus" card actually means —
+ * and it stays correct when the queue holds more rows than one page showed.
  */
+const BATCH_SCAN_PAGE = 200
+const BATCH_SCAN_PAGES = 5
+
 export const approveMany = mutation({
   args: {
-    changeIds: v.array(v.id("changes")),
+    changeIds: v.optional(v.array(v.id("changes"))),
+    batchId: v.optional(v.string()),
     via: v.union(v.literal("web"), v.literal("chat")),
   },
   returns: v.object({ approved: v.number(), skipped: v.number() }),
   handler: async (ctx, args) => {
-    if (args.changeIds.length > 200) {
-      throw new Error("400: at most 200 changes per call")
+    if ((args.changeIds === undefined) === (args.batchId === undefined)) {
+      throw new Error("400: pass exactly one of changeIds or batchId")
     }
     const student = await getCurrentStudent(ctx)
     if (!student) throw new Error("401: not signed in")
+
+    if (args.batchId !== undefined) {
+      return await approveBatch(ctx, student._id, args.batchId, args.via)
+    }
+
+    const changeIds = args.changeIds ?? []
+    if (changeIds.length > 200) {
+      throw new Error("400: at most 200 changes per call")
+    }
     let approved = 0
     let skipped = 0
-    for (const changeId of args.changeIds) {
+    for (const changeId of changeIds) {
       const change = await ctx.db.get("changes", changeId)
       // A stale, foreign, or already-resolved id is SKIPPED, not thrown: the
       // mutation is transactional, and one bad id must not roll back the other
@@ -302,6 +322,53 @@ export const expireStale = internalMutation({
     return await expireStaleInternal(ctx, args.studentId, args.olderThanMs)
   },
 })
+
+/**
+ * Every still-pending change from one extraction run, approved.
+ *
+ * Walks the caller's OWN pending index (`by_student_status`) and filters on the
+ * batch, rather than looking the batch up directly: the batch id is a
+ * client-supplied string, and a scan that starts from the student can never
+ * reach another student's rows however it is spelled. A student's pending queue
+ * is tens of rows, so the scan is cheap; `BATCH_SCAN_PAGES` is a
+ * transaction-budget backstop, and a second tap picks up any remainder
+ * (already-approved rows are no-ops).
+ */
+async function approveBatch(
+  ctx: MutationCtx,
+  studentId: Id<"students">,
+  batchId: string,
+  via: "web" | "chat"
+): Promise<{ approved: number; skipped: number }> {
+  const matches: Id<"changes">[] = []
+  let cursor: number | undefined
+
+  for (let page = 0; page < BATCH_SCAN_PAGES; page++) {
+    const after = cursor
+    const rows = await ctx.db
+      .query("changes")
+      .withIndex("by_student_status", (q) => {
+        const base = q.eq("studentId", studentId).eq("status", "pending")
+        return after === undefined ? base : base.gt("_creationTime", after)
+      })
+      .take(BATCH_SCAN_PAGE)
+    if (rows.length === 0) break
+    cursor = rows[rows.length - 1]._creationTime
+    for (const row of rows) {
+      if (row.batchId === batchId) matches.push(row._id)
+    }
+    if (rows.length < BATCH_SCAN_PAGE) break
+  }
+
+  // Collected first, then approved: approving mutates `status`, which is the
+  // very index the scan walks.
+  let approved = 0
+  for (const changeId of matches) {
+    await approveChangeInternal(ctx, changeId, via)
+    approved++
+  }
+  return { approved, skipped: 0 }
+}
 
 function clampLimit(limit: number | undefined, fallback: number, max: number) {
   if (limit === undefined) return fallback

@@ -253,6 +253,7 @@ function mapChange(doc: Doc<"changes">): Change {
     toolLabel: TOOL_LABEL[doc.origin],
     confidence,
     snapshotIds: doc.snapshotIds,
+    batchId: doc.batchId,
     at: msToIso(doc.createdAt),
   }
 }
