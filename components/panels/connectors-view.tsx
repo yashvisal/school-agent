@@ -1,9 +1,11 @@
 "use client"
 
 import * as React from "react"
+import { useMutation } from "convex/react"
 
 import { Button } from "@/components/harness/atoms/Button"
 import { StatusPill } from "@/components/harness/atoms/StatusPill"
+import { Switch } from "@/components/harness/atoms/Switch"
 import {
   EmptyState,
   LoadingRows,
@@ -11,15 +13,31 @@ import {
   ViewportBody,
   ViewportHeader,
 } from "@/components/panels/chrome"
+import {
+  Card,
+  CardNote,
+  Divider,
+  FieldRow,
+  SaveBar,
+  SelectField,
+  TextField,
+} from "@/components/panels/form"
+import { api } from "@/convex/_generated/api"
+import type { Id } from "@/convex/_generated/dataModel"
 import { agoLabel } from "@/lib/format"
-import { useSources } from "@/lib/data/hooks"
-import type { Source, SourceHealth } from "@/lib/data/types"
+import { errorMessage } from "@/lib/errors"
+import { useCourses, useSources } from "@/lib/data/hooks"
+import type { Course, Source, SourceHealth } from "@/lib/data/types"
 
 /**
- * Connectors — set-and-forget with health status (vision §8). The Canvas
- * personal-access-token path is ToS-grey on institutional instances and can
- * break silently, which is exactly why `sources.health` is surfaced here rather
- * than buried (core.md "Test data & limitations").
+ * Connectors — set-and-forget with health status (vision §8), plus the two
+ * things a student has to do by hand before anything can be planned: attach a
+ * feed (Canvas token or an iCal URL) and upload the documents nobody polls (a
+ * syllabus, a class schedule).
+ *
+ * The Canvas personal-access-token path is ToS-grey on institutional instances
+ * and can break silently, which is exactly why `sources.health` is surfaced
+ * here rather than buried (core.md "Test data & limitations").
  */
 
 const HEALTH: Record<
@@ -32,9 +50,59 @@ const HEALTH: Record<
   never_synced: { tone: "neutral", label: "One-time upload" },
 }
 
+/** The health message `sources.resync` writes synchronously, so the card can
+ * show progress the moment the mutation lands (convex/ingest/sources.ts). */
+const RESYNC_NOTE = "re-sync requested"
+
+/* ── one source ─────────────────────────────────────────────────────────── */
+
 function SourceCard({ source }: { source: Source }) {
-  const [resyncing, setResyncing] = React.useState(false)
+  const resync = useMutation(api.ingest.sources.resync)
+  const setEnabled = useMutation(api.ingest.sources.setEnabled)
+  const [inFlight, setInFlight] = React.useState(false)
+  /* What `lastPolledAt` was when Re-sync was tapped. The adapters bump it on
+   * both the success and the failure path, so "it moved" is a real completion
+   * event — no timer pretending to be one. */
+  const [pending, setPending] = React.useState<{ polledAt: string | null } | null>(
+    null
+  )
+  const [error, setError] = React.useState<string | null>(null)
   const health = HEALTH[source.health]
+
+  const resyncing =
+    inFlight ||
+    (pending !== null &&
+      source.lastPolledAt === pending.polledAt &&
+      source.note === RESYNC_NOTE)
+
+  /* `pending` is never cleared on success: once `lastPolledAt` has moved past
+   * the value recorded at the click, the condition above is false forever, and
+   * the next click overwrites it. */
+
+  const onResync = async () => {
+    setError(null)
+    setInFlight(true)
+    setPending({ polledAt: source.lastPolledAt })
+    try {
+      // The mutation's own health patch is committed by the time this resolves,
+      // so `resyncing` never flickers off between the two.
+      await resync({ sourceId: source._id as Id<"sources"> })
+    } catch (cause) {
+      setError(errorMessage(cause))
+      setPending(null)
+    } finally {
+      setInFlight(false)
+    }
+  }
+
+  const onToggle = async (enabled: boolean) => {
+    setError(null)
+    try {
+      await setEnabled({ sourceId: source._id as Id<"sources">, enabled })
+    } catch (cause) {
+      setError(errorMessage(cause))
+    }
+  }
 
   return (
     <div className="overflow-hidden rounded-card bg-surface shadow-card">
@@ -42,6 +110,7 @@ function SourceCard({ source }: { source: Source }) {
         <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">
           {source.label}
         </span>
+        {!source.enabled && <StatusPill tone="neutral">Disabled</StatusPill>}
         <StatusPill tone={health.tone}>{health.label}</StatusPill>
       </div>
 
@@ -69,30 +138,376 @@ function SourceCard({ source }: { source: Source }) {
         {source.note && (
           <p className="text-[12.5px] leading-relaxed text-ink-2">{source.note}</p>
         )}
+        {error && <p className="text-[12.5px] leading-relaxed text-red">{error}</p>}
       </div>
 
-      <div className="primitive-card-footer flex min-h-11 items-center justify-end border-t border-line">
-        <Button
-          size="xs"
-          variant="secondary"
-          disabled={resyncing}
-          onClick={() => {
-            // TODO(core): api.sources.resync({ sourceId }) — until that exists
-            // there is no completion event, so release the control ourselves
-            // rather than leaving it stuck on "Re-syncing…" for the session.
-            setResyncing(true)
-            window.setTimeout(() => setResyncing(false), 1200)
-          }}
-        >
-          {resyncing ? "Re-syncing…" : "Re-sync"}
-        </Button>
+      <div className="primitive-card-footer flex min-h-11 items-center gap-3 border-t border-line">
+        <span className="flex items-center gap-2">
+          <Switch
+            checked={source.enabled}
+            onChange={(next) => void onToggle(next)}
+            label={`${source.enabled ? "Disable" : "Enable"} ${source.label}`}
+          />
+          <span className="text-[12px] text-ink-3">
+            {source.enabled ? "Enabled" : "Disabled"}
+          </span>
+        </span>
+        <span className="ml-auto">
+          <Button
+            size="xs"
+            variant="secondary"
+            disabled={resyncing || !source.enabled}
+            onClick={() => void onResync()}
+            title={
+              source.enabled
+                ? "Run the poll (or re-extraction) this source would run on its own"
+                : "Enable the source before re-syncing it"
+            }
+          >
+            {resyncing ? "Re-syncing…" : "Re-sync"}
+          </Button>
+        </span>
       </div>
     </div>
   )
 }
 
+/* ── add a feed ─────────────────────────────────────────────────────────── */
+
+function AddCanvas() {
+  const add = useMutation(api.ingest.sources.add)
+  const [baseUrl, setBaseUrl] = React.useState("")
+  const [token, setToken] = React.useState("")
+  const [saving, setSaving] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+  const [note, setNote] = React.useState<string | null>(null)
+
+  const dirty = baseUrl.trim().length > 0 && token.trim().length > 0
+
+  const onSave = async () => {
+    setSaving(true)
+    setError(null)
+    setNote(null)
+    try {
+      await add({ kind: "canvas", config: { baseUrl: baseUrl.trim(), token: token.trim() } })
+      // The token is never readable again — not even by us — so clear the field
+      // rather than leaving a value on screen that no longer reflects storage.
+      setToken("")
+      setNote("Connected. The first poll runs on the next sweep, or hit Re-sync.")
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card>
+      <FieldRow label="Canvas URL" hint="your school's instance" htmlFor="canvas-base-url">
+        <TextField
+          id="canvas-base-url"
+          type="url"
+          inputMode="url"
+          placeholder="https://canvas.duke.edu"
+          className="w-64"
+          value={baseUrl}
+          onChange={(e) => setBaseUrl(e.target.value)}
+        />
+      </FieldRow>
+      <Divider />
+      <FieldRow label="Access token" htmlFor="canvas-token">
+        <TextField
+          id="canvas-token"
+          type="password"
+          autoComplete="off"
+          placeholder="paste the token"
+          className="w-64"
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+        />
+      </FieldRow>
+      <Divider />
+      <CardNote>
+        In Canvas: <strong>Account → Settings → Approved Integrations → New
+        access token</strong>. Copy it here — it is stored on the server, used
+        only to poll your own courses, and never shown to the browser again
+        (the card above will just say &ldquo;Personal access token&rdquo;). Some
+        schools disable personal tokens; if yours has, the source will report
+        Failing with the reason.
+      </CardNote>
+      <Divider />
+      <SaveBar
+        dirty={dirty}
+        saving={saving}
+        error={error}
+        note={note}
+        label="Connect Canvas"
+        onSave={() => void onSave()}
+      />
+    </Card>
+  )
+}
+
+function AddIcal() {
+  const add = useMutation(api.ingest.sources.add)
+  const [url, setUrl] = React.useState("")
+  const [saving, setSaving] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+  const [note, setNote] = React.useState<string | null>(null)
+
+  const onSave = async () => {
+    setSaving(true)
+    setError(null)
+    setNote(null)
+    try {
+      await add({ kind: "ical", config: { url: url.trim() } })
+      setNote("Added. The feed is read on the next sweep, or hit Re-sync.")
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card>
+      <FieldRow label="Feed URL" hint="the .ics link, not the web page" htmlFor="ical-url">
+        <TextField
+          id="ical-url"
+          type="url"
+          inputMode="url"
+          placeholder="https://…/calendar.ics"
+          className="w-64"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+        />
+      </FieldRow>
+      <Divider />
+      <CardNote>
+        Canvas publishes one per course under <strong>Calendar → Calendar
+        Feed</strong>; most LMSes have an equivalent. A feed carries dates and
+        titles but no submission status, so it complements a Canvas token
+        rather than replacing one.
+      </CardNote>
+      <Divider />
+      <SaveBar
+        dirty={url.trim().length > 0}
+        saving={saving}
+        error={error}
+        note={note}
+        label="Add feed"
+        onSave={() => void onSave()}
+      />
+    </Card>
+  )
+}
+
+/* ── uploads ────────────────────────────────────────────────────────────── */
+
+type UploadRow = {
+  id: string
+  file: File
+  /** "" is deliberate: `uploads.start` accepts a syllabus with no course and
+   * the parse proposes one. */
+  courseId: string
+  status: "queued" | "uploading" | "parsing" | "error"
+  sourceId?: string
+  error?: string
+}
+
+let uploadSeq = 0
+
+/**
+ * `generateUploadUrl` → `POST` the bytes to Convex storage → `uploads.start`,
+ * which registers the source and schedules the extraction. The row then says
+ * "Parsing…" until the source it produced reports a poll — the same real
+ * completion event Re-sync watches, not a timer.
+ */
+function UploadSection({
+  kind,
+  courses,
+  sources,
+}: {
+  kind: "syllabus" | "schedule"
+  courses: Course[] | undefined
+  sources: Source[] | undefined
+}) {
+  const generateUploadUrl = useMutation(api.ingest.uploads.generateUploadUrl)
+  const start = useMutation(api.ingest.uploads.start)
+  const [rows, setRows] = React.useState<UploadRow[]>([])
+  const [busy, setBusy] = React.useState(false)
+  const inputRef = React.useRef<HTMLInputElement>(null)
+
+  const polledSourceIds = React.useMemo(
+    () =>
+      new Set(
+        (sources ?? []).filter((s) => s.lastPolledAt !== null).map((s) => s._id)
+      ),
+    [sources]
+  )
+
+  const patch = (id: string, next: Partial<UploadRow>) =>
+    setRows((current) =>
+      current.map((row) => (row.id === id ? { ...row, ...next } : row))
+    )
+
+  const onPick = (files: FileList | null) => {
+    if (!files) return
+    const picked = Array.from(files).map((file) => ({
+      id: `u${++uploadSeq}`,
+      file,
+      courseId: "",
+      status: "queued" as const,
+    }))
+    // A schedule upload is one file: the class schedule, replacing whatever
+    // was uploaded before.
+    setRows((current) => (kind === "schedule" ? picked.slice(0, 1) : [...current, ...picked]))
+  }
+
+  const upload = async (row: UploadRow) => {
+    patch(row.id, { status: "uploading", error: undefined })
+    try {
+      const url = await generateUploadUrl({})
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": row.file.type || "application/octet-stream" },
+        body: row.file,
+      })
+      if (!response.ok) {
+        throw new Error(`storage returned ${response.status}`)
+      }
+      const { storageId } = (await response.json()) as { storageId: string }
+      const { sourceId } = await start({
+        kind,
+        storageId: storageId as Id<"_storage">,
+        ...(kind === "syllabus" && row.courseId
+          ? { courseId: row.courseId as Id<"courses"> }
+          : {}),
+        filename: row.file.name,
+      })
+      patch(row.id, { status: "parsing", sourceId })
+    } catch (cause) {
+      patch(row.id, { status: "error", error: errorMessage(cause) })
+    }
+  }
+
+  const onUploadAll = async () => {
+    setBusy(true)
+    // Sequential on purpose: each upload schedules a model call, and firing six
+    // at once is six concurrent extractions for no perceptible gain.
+    for (const row of rows.filter((r) => r.status === "queued" || r.status === "error")) {
+      await upload(row)
+    }
+    setBusy(false)
+    if (inputRef.current) inputRef.current.value = ""
+  }
+
+  const queued = rows.filter((r) => r.status === "queued" || r.status === "error").length
+  const activeCourses = (courses ?? []).filter((c) => c.status === "active")
+
+  return (
+    <Card>
+      <FieldRow
+        label={kind === "syllabus" ? "Syllabus files" : "Class schedule"}
+        hint={
+          kind === "syllabus"
+            ? "PDF, Word or an exported page — one per course, or all at once"
+            : "the one file with your weekly class times"
+        }
+        htmlFor={`upload-${kind}`}
+      >
+        <input
+          id={`upload-${kind}`}
+          ref={inputRef}
+          type="file"
+          multiple={kind === "syllabus"}
+          onChange={(e) => onPick(e.target.files)}
+          className="max-w-[14rem] text-[12px] text-ink-2 file:mr-2 file:h-7 file:rounded-full file:border-0 file:bg-inset file:px-2.5 file:text-[12px] file:text-ink file:shadow-hairline"
+        />
+      </FieldRow>
+
+      {rows.length > 0 && (
+        <>
+          <Divider />
+          <ul className="flex flex-col divide-y divide-line">
+            {rows.map((row) => (
+              <li
+                key={row.id}
+                className="flex min-h-11 flex-wrap items-center gap-2 py-2"
+              >
+                <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink">
+                  {row.file.name}
+                </span>
+                {kind === "syllabus" && row.status === "queued" && (
+                  <SelectField
+                    aria-label={`Course for ${row.file.name}`}
+                    value={row.courseId}
+                    onChange={(e) => patch(row.id, { courseId: e.target.value })}
+                  >
+                    <option value="">Unassigned</option>
+                    {activeCourses.map((c) => (
+                      <option key={c._id} value={c._id}>
+                        {c.code}
+                      </option>
+                    ))}
+                  </SelectField>
+                )}
+                <UploadStatus
+                  row={row}
+                  parsed={row.sourceId !== undefined && polledSourceIds.has(row.sourceId)}
+                />
+              </li>
+            ))}
+          </ul>
+          <Divider />
+          <CardNote>
+            {kind === "syllabus"
+              ? "Leave a file unassigned if you don't have the course yet — the parse proposes one, and it shows up in your change feed with the deadlines it found."
+              : "The parse becomes your hard class blocks: the planner never puts work on top of one."}
+          </CardNote>
+        </>
+      )}
+
+      <Divider />
+      <SaveBar
+        dirty={queued > 0}
+        saving={busy}
+        label={queued > 1 ? `Upload ${queued} files` : "Upload"}
+        note={
+          rows.length === 0
+            ? "Nothing selected yet."
+            : "Each upload becomes a source; its deadlines arrive as one card in the change feed."
+        }
+        onSave={() => void onUploadAll()}
+      />
+    </Card>
+  )
+}
+
+function UploadStatus({ row, parsed }: { row: UploadRow; parsed: boolean }) {
+  if (row.status === "error") {
+    return (
+      <span className="text-[12px] text-red">{row.error ?? "upload failed"}</span>
+    )
+  }
+  if (row.status === "uploading") {
+    return <span className="text-[12px] text-ink-3">Uploading…</span>
+  }
+  if (row.status === "parsing") {
+    return parsed ? (
+      <StatusPill tone="green">Parsed</StatusPill>
+    ) : (
+      <span className="text-[12px] text-ink-3">Parsing…</span>
+    )
+  }
+  return <span className="text-[12px] text-ink-3">Ready</span>
+}
+
+/* ── the panel ──────────────────────────────────────────────────────────── */
+
 export function ConnectorsView() {
   const sources = useSources()
+  const courses = useCourses()
   /* `never_synced` is a one-time upload, not a problem — counting it would
    * contradict the neutral "One-time upload" pill on the card itself. */
   const unhealthy =
@@ -132,6 +547,24 @@ export function ConnectorsView() {
               ))}
             </div>
           )}
+        </section>
+
+        <section className="flex flex-col gap-3">
+          <SectionHeader
+            title="Add a source"
+            hint="a feed that keeps itself current"
+          />
+          <AddCanvas />
+          <AddIcal />
+        </section>
+
+        <section className="flex flex-col gap-3">
+          <SectionHeader
+            title="Upload documents"
+            hint="the parts nobody publishes as a feed"
+          />
+          <UploadSection kind="syllabus" courses={courses} sources={sources} />
+          <UploadSection kind="schedule" courses={courses} sources={sources} />
         </section>
 
         <section className="flex flex-col gap-3">

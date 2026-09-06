@@ -221,6 +221,8 @@ export type Source = {
   detail: string
   /** ISO 8601, or null when it has never run */
   lastPolledAt: string | null
+  /** A disabled source is skipped by the cron and refuses a re-sync. */
+  enabled: boolean
   health: SourceHealth
   /** what the source is currently feeding, for the connector card */
   covers: string[]

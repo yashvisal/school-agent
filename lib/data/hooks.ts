@@ -360,6 +360,7 @@ export function useSources(): Source[] | undefined {
         detail: sourceDetail(doc),
         lastPolledAt:
           doc.lastPolledAt !== undefined ? msToIso(doc.lastPolledAt) : null,
+        enabled: doc.enabled,
         health: sourceHealth(doc),
         covers: coversFor(doc, courses),
         note: doc.health.message,
