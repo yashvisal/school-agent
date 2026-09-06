@@ -194,14 +194,18 @@ function sameValue(a: unknown, b: unknown): boolean {
  * nobody made. The canonical form reads the fields explicitly and sorts, so
  * only a real difference in the grid counts.
  */
+// Explicit field order, then JSON — never a hand-joined string. A joined form
+// with a separator collides the moment a label contains the separator
+// (`label: "a|b"` vs `courseId: "b|c"`), and a collision here suppresses a real
+// edit. JSON escapes, so distinct values stay distinct.
 const canonicalBlock = (block: TimeBlock) =>
-  [
+  JSON.stringify([
     block.dayOfWeek,
     block.startMin,
     block.endMin,
-    block.label ?? "",
-    block.courseId ?? "",
-  ].join("|")
+    block.label ?? null,
+    block.courseId ?? null,
+  ])
 
 const byBlock = (a: TimeBlock, b: TimeBlock) =>
   a.dayOfWeek - b.dayOfWeek ||
@@ -210,16 +214,15 @@ const byBlock = (a: TimeBlock, b: TimeBlock) =>
   canonicalBlock(a).localeCompare(canonicalBlock(b))
 
 const canonicalBlocks = (blocks: readonly TimeBlock[]) =>
-  [...blocks].sort(byBlock).map(canonicalBlock).join(";")
+  [...blocks].sort(byBlock).map(canonicalBlock)
 
 function canonicalAvailability(value: unknown): string {
   if (value === undefined) return "absent"
   const availability = value as Infer<typeof availabilityV>
   const exceptions = [...availability.exceptions]
     .sort((a, b) => a.date.localeCompare(b.date))
-    .map((exception) => `${exception.date}=${canonicalBlocks(exception.blocks)}`)
-    .join(",")
-  return `${canonicalBlocks(availability.weekly)}#${exceptions}`
+    .map((exception) => [exception.date, canonicalBlocks(exception.blocks)])
+  return JSON.stringify([canonicalBlocks(availability.weekly), exceptions])
 }
 
 /**
@@ -370,9 +373,14 @@ export const updatePrefs = mutation({
       // Network call, so an action, so scheduled: the mutation must commit the
       // new number whether or not Photon is reachable. The number goes with it
       // so a late outcome cannot be pinned on a number it was never about.
+      // `attemptAt` is the pending stamp just written: the outcome may only
+      // land on THIS attempt. A run delayed past the retry window would
+      // otherwise overwrite the newer attempt a re-save started, because the
+      // phone still matches.
       await ctx.scheduler.runAfter(0, internal.students.registerContact, {
         studentId: student._id,
         phone: next.phone as string,
+        attemptAt: now,
       })
     }
 
@@ -440,20 +448,32 @@ export const markPhotonRegistration = internalMutation({
     studentId: v.id("students"),
     /** The number the outcome is ABOUT, normalized. */
     phone: v.string(),
+    /**
+     * The `pending.at` stamp of the attempt this outcome belongs to. When set,
+     * the outcome lands only if that attempt is still the row's current one;
+     * a manual `registerContact` run passes none and is bound by phone alone.
+     */
+    attemptAt: v.optional(v.number()),
     registration: photonRegistrationV,
   },
   returns: v.null(),
   handler: async (ctx, args) => {
     const student = await ctx.db.get("students", args.studentId)
     if (!student) return null
-    if (student.phone !== args.phone) {
-      // The number moved on while this registration was in flight. Writing the
-      // outcome now would label the CURRENT number with a result that belongs
-      // to a different one — "we can text this" about a number nobody
-      // registered. The save that changed the phone scheduled its own run.
+    const current = student.photonRegistration
+    const staleAttempt =
+      args.attemptAt !== undefined &&
+      !(current?.status === "pending" && current.at === args.attemptAt)
+    if (student.phone !== args.phone || staleAttempt) {
+      // Either the number moved on while this registration was in flight, or a
+      // re-save started a NEWER attempt for the same number (this one ran late,
+      // past the retry window). Writing the outcome now would label the current
+      // number, or the current attempt, with a verdict that is not its own —
+      // "we can text this" about a number or a run nobody is waiting on.
       console.warn("[students] stale Photon registration dropped", {
         studentId: args.studentId,
         status: args.registration.status,
+        reason: student.phone !== args.phone ? "phone changed" : "superseded attempt",
       })
       return null
     }
@@ -530,13 +550,19 @@ async function postContact(phone: string): Promise<RegistrationOutcome> {
  * `npx convex run students:registerContact '{"studentId": "j57a...", "phone": "+15551234567"}'`.
  */
 export const registerContact = internalAction({
-  args: { studentId: v.id("students"), phone: v.string() },
+  args: {
+    studentId: v.id("students"),
+    phone: v.string(),
+    /** The pending stamp this run was scheduled for; see `markPhotonRegistration`. */
+    attemptAt: v.optional(v.number()),
+  },
   returns: photonRegistrationV,
   handler: async (ctx, args): Promise<RegistrationOutcome> => {
     const outcome = await postContact(args.phone)
     await ctx.runMutation(internal.students.markPhotonRegistration, {
       studentId: args.studentId,
       phone: args.phone,
+      ...(args.attemptAt !== undefined ? { attemptAt: args.attemptAt } : {}),
       registration: outcome,
     })
     return outcome

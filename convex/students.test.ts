@@ -639,6 +639,56 @@ describe("registerContact", () => {
     expect((await load(t, studentId))?.photonRegistration?.status).toBe("registered")
   })
 
+  test("a delayed first attempt cannot overwrite the newer attempt a re-save started", async () => {
+    const t = setupTest()
+    const first = Date.now() - REGISTRATION_RETRY_MS - 1
+    // The first attempt was scheduled at `first` and has not run yet; the
+    // student re-saved after the retry window, so the row now carries a NEWER
+    // pending attempt. The late first run must not stamp its verdict on it.
+    const studentId = await seed(t, {
+      phone: PHONE,
+      photonRegistration: { status: "pending", at: first + REGISTRATION_RETRY_MS + 1 },
+    })
+
+    const outcome = await t.action(internal.students.registerContact, {
+      studentId,
+      phone: PHONE,
+      attemptAt: first,
+    })
+
+    expect(outcome.status).toBe("registered")
+    expect((await load(t, studentId))?.photonRegistration?.status).toBe("pending")
+  })
+
+  test("a canonical availability does not collide on separator characters", async () => {
+    const t = setupTest()
+    // Two blocks, labelled "x" and "y". The old separator-joined canonical form
+    // rendered them as `1|540|600|x|;1|540|600|y|` — which is also exactly what
+    // ONE block labelled `x|;1|540|600|y` rendered as, so the two grids were
+    // "equal" and the edit was suppressed. JSON escaping keeps them apart.
+    const studentId = await seed(t, {
+      availability: {
+        weekly: [
+          { dayOfWeek: 1, startMin: 540, endMin: 600, label: "x" },
+          { dayOfWeek: 1, startMin: 540, endMin: 600, label: "y" },
+        ],
+        exceptions: [],
+      },
+    })
+
+    const result = await t
+      .withIdentity({ subject: CLERK_ID })
+      .mutation(api.students.updatePrefs, {
+        availability: {
+          weekly: [{ dayOfWeek: 1, startMin: 540, endMin: 600, label: "x|;1|540|600|y" }],
+          exceptions: [],
+        },
+      })
+
+    expect(result.changed).toEqual(["availability"])
+    expect((await load(t, studentId))?.availability.weekly).toHaveLength(1)
+  })
+
   test("the attempt is marked pending before it is scheduled", async () => {
     const t = setupTest()
     const studentId = await seed(t)
