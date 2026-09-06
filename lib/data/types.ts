@@ -191,6 +191,13 @@ export type Change = {
   courseId?: Id
   deadlineId?: Id
   kind: ChangeKind
+  /**
+   * Which table the change edits. `entity.id` is only a *real* row id once the
+   * change has been applied — a pending `deadline_added` carries the
+   * extraction's merge key — so the Fix editor keys off whether the row it
+   * names is actually in `useDeadlines()`, not off this alone.
+   */
+  entityTable: "students" | "courses" | "deadlines" | "tasks"
   /** one-line summary as the feed shows it */
   summary: string
   fields: ChangeField[]

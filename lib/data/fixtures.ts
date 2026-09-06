@@ -528,6 +528,7 @@ export const changes: Change[] = [
     courseId: "course_micro",
     deadlineId: "dl_econ_midterm",
     kind: "deadline_moved",
+    entityTable: "deadlines",
     summary: "ECON 205 midterm may move from Thursday to the following Monday",
     fields: [
       { field: "dueAt", before: at(9, 13, 0), after: at(13, 13, 0) },
@@ -546,6 +547,7 @@ export const changes: Change[] = [
     studentId: STUDENT,
     courseId: "course_modernism",
     kind: "grading_scheme_parsed",
+    entityTable: "courses",
     summary: "ENGL 118 grading scheme read from the syllabus — three categories",
     fields: [
       { field: "Response papers", before: null, after: "30%" },
@@ -566,6 +568,7 @@ export const changes: Change[] = [
     courseId: "course_orgchem",
     /* no `deadlineId`: approving this change is what creates the deadline */
     kind: "deadline_added",
+    entityTable: "deadlines",
     summary: "CHEM 202 Midterm 2 read off the syllabus — evening slot, not on Canvas",
     fields: [
       { field: "dueAt", before: null, after: at(16, 19, 0) },
@@ -587,6 +590,7 @@ export const changes: Change[] = [
     courseId: "course_algos",
     deadlineId: "dl_cs_pa5",
     kind: "deadline_added",
+    entityTable: "deadlines",
     summary: "New from Canvas: PA5 — shortest paths",
     fields: [{ field: "dueAt", before: null, after: at(7, 23, 59) }],
     origin: "canvas",
@@ -602,6 +606,7 @@ export const changes: Change[] = [
     courseId: "course_orgchem",
     deadlineId: "dl_chem_ps7",
     kind: "deadline_moved",
+    entityTable: "deadlines",
     summary: "Problem Set 7 moved a day later",
     fields: [{ field: "dueAt", before: at(0, 23, 59), after: at(1, 23, 59) }],
     origin: "canvas",
@@ -617,6 +622,7 @@ export const changes: Change[] = [
     courseId: "course_algos",
     deadlineId: "dl_cs_pa3",
     kind: "grade_posted",
+    entityTable: "deadlines",
     summary: "PA3 graded — 94/100",
     fields: [{ field: "score", before: null, after: "94" }],
     origin: "canvas",
@@ -634,6 +640,7 @@ export const changes: Change[] = [
     /* the transition is to `graded`, so the kind is `grade_posted` — a feed
      * filter that trusts `kind` must not read a grade event as a submission */
     kind: "grade_posted",
+    entityTable: "deadlines",
     summary: "Problem Set 4 grade posted",
     fields: [
       { field: "submissionStatus", before: "submitted", after: "graded" },
@@ -651,6 +658,7 @@ export const changes: Change[] = [
     courseId: "course_modernism",
     deadlineId: "dl_engl_response4",
     kind: "deadline_added",
+    entityTable: "deadlines",
     summary: "New from the ENGL 118 calendar feed: response paper 4",
     fields: [{ field: "dueAt", before: null, after: at(2, 12, 0) }],
     origin: "ical",
@@ -665,6 +673,7 @@ export const changes: Change[] = [
     studentId: STUDENT,
     courseId: "course_orgchem",
     kind: "chat_decision",
+    entityTable: "courses",
     summary: "You said you'd push the ch. 18 reading to tomorrow — replanned",
     fields: [{ field: "plannedFor", before: at(-1, 20, 0), after: at(0, 21, 30) }],
     origin: "chat",

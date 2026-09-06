@@ -246,6 +246,7 @@ function mapChange(doc: Doc<"changes">): Change {
     deadlineId:
       doc.entity.table === "deadlines" ? doc.entity.id : undefined,
     kind: doc.kind,
+    entityTable: doc.entity.table,
     summary: changeSummary(doc),
     fields: diffFields(doc.before, doc.after),
     origin: doc.origin,

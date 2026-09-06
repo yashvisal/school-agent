@@ -43,7 +43,7 @@ export function DashboardView() {
       />
       <ViewportBody>
         <TodayPlan tasks={tasks} deadlines={deadlines} courses={courses} />
-        <ChangeFeed changes={changes} courses={courses} />
+        <ChangeFeed changes={changes} courses={courses} deadlines={deadlines} />
         <DeadlinesTable
           title="Next two weeks"
           deadlines={upcoming}
