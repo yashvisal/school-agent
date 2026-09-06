@@ -13,12 +13,33 @@ import type { CommitPlanInput } from "../../tools/commitPlan.js"
  *
  * 1. A morning push calls `commitPlan` once, for the day it planned, with the
  *    1–3 blocks it named.
- * 2. Every block is inside one of that option's `fits` windows. Checked here
- *    against the plan the agent actually saw — captured from the
- *    `getFeasibleActions` output — and, independently, by Core, which refuses
- *    the commit outright if a block is not feasible. That is why the call is
- *    also asserted to have COMPLETED: a rejected commit fails the tool.
+ * 2. Every block satisfies the invariant Core enforces, asserted here against the
+ *    plan the agent actually saw (captured from the `getFeasibleActions` output):
+ *    inside a free window that option can use, ending by the due minute on the
+ *    due day, and no two picks covering the same minutes.
+ *
+ * The check is against the WINDOW a `fits` entry points at, not the fit's own
+ * span, because the span is not the invariant: a fit starts at the head of its
+ * window and runs one effort estimate long, so requiring literal containment
+ * would make two blocks in one afternoon impossible and refuse a 7pm block in a
+ * 9am–9pm window. What the guarantee is actually about — never a class, never
+ * past the due time — is a property of the window and the due time, and that is
+ * what both Core and this eval check. Core is the second gate: the call is also
+ * asserted to have COMPLETED, and a rejected commit fails the tool.
  */
+/** Minutes from local midnight for an instant, in the student's zone. */
+function localMinutes(ms: number, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(ms))
+  const value = (type: string) =>
+    Number(parts.find((part) => part.type === type)?.value ?? 0)
+  return value("hour") * 60 + value("minute")
+}
+
 export default defineEval({
   description:
     "A morning push commits the plan it just texted: one commitPlan call for that date, 1-3 picks, every block inside the option's fits.",
@@ -50,8 +71,22 @@ export default defineEval({
         }
         if (plan && input.date !== plan.date) return false
 
-        return input.picks.every((pick) => {
+        return input.picks.every((pick, i) => {
           if (pick.endMin <= pick.startMin) return false
+          // Exactly one complete identity.
+          if (!pick.taskId && !pick.deadlineId && !(pick.title && pick.courseId)) {
+            return false
+          }
+          // A day is a sequence: no two blocks cover the same minutes.
+          const overlaps = input.picks
+            .slice(0, i)
+            .some(
+              (earlier) =>
+                Math.max(earlier.startMin, pick.startMin) <
+                Math.min(earlier.endMin, pick.endMin),
+            )
+          if (overlaps) return false
+
           // Shape-only when the plan could not be captured; Core's own
           // verification still stands behind `status: "completed"`.
           if (!plan) return true
@@ -65,10 +100,21 @@ export default defineEval({
           )
           if (!option) return false
 
+          // Never past the due minute on the due day. `dueInDays === 0` is the
+          // planner's own statement that `dueAt` falls on the planned date; the
+          // minute is read in the STUDENT's zone, which the plan carries.
+          const cutoffMin =
+            option.dueAt !== undefined && option.dueInDays === 0
+              ? localMinutes(option.dueAt, plan.timezone)
+              : 1440
+
           return option.fits.some((fit) => {
             const window = plan?.windows[fit.windowIndex]
             if (!window) return false
-            return pick.startMin >= window.startMin && pick.endMin <= window.endMin
+            return (
+              pick.startMin >= window.startMin &&
+              pick.endMin <= Math.min(window.endMin, cutoffMin)
+            )
           })
         })
       },

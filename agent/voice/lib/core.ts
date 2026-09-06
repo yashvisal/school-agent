@@ -193,14 +193,18 @@ export async function proposeChange(
   return await corePost("/voice/proposeChange", { studentId, change })
 }
 
-export type PlanPick = {
-  taskId?: string
-  deadlineId?: string
-  title?: string
-  courseId?: string
-  startMin: number
-  endMin: number
-}
+/** Minutes from local midnight; `endMin` is exclusive and must be after `startMin`. */
+type PlanBlock = { startMin: number; endMin: number }
+
+/**
+ * A pick carries exactly ONE complete identity — the union is the type, so a
+ * bare `title` with no `courseId` does not compile. Core enforces the same rule
+ * and answers a `400` naming the pick; this is the earlier, cheaper boundary.
+ */
+export type PlanPick =
+  | (PlanBlock & { taskId: string })
+  | (PlanBlock & { deadlineId: string })
+  | (PlanBlock & { title: string; courseId: string })
 
 export type CommittedBlock = {
   taskId: string
