@@ -321,6 +321,16 @@ export const updatePrefs = mutation({
       assertCalendarDate(field, value)
       next[field] = value
     }
+    // The term is a range, so the two dates are checked as one — against what
+    // will be stored, i.e. the argument where given and the row otherwise. A
+    // start after the end is a form that got its fields swapped, not a fact.
+    const mergedStart = (next.semesterStart ?? student.semesterStart) as string | undefined
+    const mergedEnd = (next.semesterEnd ?? student.semesterEnd) as string | undefined
+    if (mergedStart !== undefined && mergedEnd !== undefined && mergedStart > mergedEnd) {
+      throw new Error(
+        `400: semesterStart (${mergedStart}) must be on or before semesterEnd (${mergedEnd})`
+      )
+    }
 
     // --- diff --------------------------------------------------------------
     const changed: PrefKey[] = []

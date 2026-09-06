@@ -795,3 +795,32 @@ describe("ensure", () => {
     expect((await load(t, studentId))?.timezone).toBe("America/New_York")
   })
 })
+
+describe("updatePrefs semester range", () => {
+  test("a start after the end is refused, whichever side the row already holds", async () => {
+    const t = setupTest()
+    const studentId = await seed(t, { semesterEnd: "2026-12-11" })
+    const as = t.withIdentity({ subject: CLERK_ID })
+
+    // Argument start vs stored end.
+    await expect(
+      as.mutation(api.students.updatePrefs, { semesterStart: "2026-12-12" })
+    ).rejects.toThrow("400: semesterStart")
+    // Both as arguments, swapped.
+    await expect(
+      as.mutation(api.students.updatePrefs, {
+        semesterStart: "2026-12-01",
+        semesterEnd: "2026-08-24",
+      })
+    ).rejects.toThrow("400: semesterStart")
+    expect((await load(t, studentId))?.semesterStart).toBeUndefined()
+
+    // A same-day term is allowed; so is a well-ordered one.
+    await expect(
+      as.mutation(api.students.updatePrefs, { semesterStart: "2026-12-11" })
+    ).resolves.toMatchObject({ changed: ["semesterStart"] })
+    await expect(
+      as.mutation(api.students.updatePrefs, { semesterStart: "2026-08-24" })
+    ).resolves.toMatchObject({ changed: ["semesterStart"] })
+  })
+})
