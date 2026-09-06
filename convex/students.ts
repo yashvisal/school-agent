@@ -2,7 +2,6 @@ import type { Infer } from "convex/values"
 import { v } from "convex/values"
 
 import { internal } from "./_generated/api"
-import type { Doc } from "./_generated/dataModel"
 import {
   internalAction,
   internalMutation,
@@ -281,7 +280,31 @@ export const updatePrefs = mutation({
       after[key] = next[key]
     }
 
-    if (changed.length === 0) return { studentId: student._id, changed: [] }
+    /**
+     * A phone that did NOT change can still need registering: the last attempt
+     * may have failed, or been skipped on a deployment with no Voice attached.
+     * Settings' "try again" is a re-save, so this is that retry path — and it
+     * writes no change row, because nothing about the student changed.
+     */
+    const registerPhone =
+      next.phone !== undefined &&
+      (changed.includes("phone") || student.photonRegistration?.status !== "registered")
+
+    const scheduleRegistration = async () => {
+      if (!registerPhone) return
+      // Network call, so an action, so scheduled: the mutation must commit the
+      // new number whether or not Photon is reachable. The number goes with it
+      // so a late outcome cannot be pinned on a number it was never about.
+      await ctx.scheduler.runAfter(0, internal.students.registerContact, {
+        studentId: student._id,
+        phone: next.phone as string,
+      })
+    }
+
+    if (changed.length === 0) {
+      await scheduleRegistration()
+      return { studentId: student._id, changed: [] }
+    }
 
     const scheduleOnly = changed.every((key) => SCHEDULE_KEYS.has(key))
     const { changeId } = await proposeChangeInternal(ctx, {
@@ -296,12 +319,14 @@ export const updatePrefs = mutation({
     await approveChangeInternal(ctx, changeId, "web")
 
     if (changed.includes("phone")) {
-      // Network call, so an action, so scheduled: the mutation must commit the
-      // new number whether or not Photon is reachable.
-      await ctx.scheduler.runAfter(0, internal.students.registerContact, {
-        studentId: student._id,
-      })
+      // Patched directly rather than carried in the change: `photonRegistration`
+      // is bookkeeping about our transport, not a fact about the student, and
+      // it is deliberately outside `STUDENT_KEYS`. Clearing it is the point —
+      // the old number's registration says nothing about the new one, and
+      // leaving it would tell Settings we can text a number we never registered.
+      await ctx.db.patch("students", student._id, { photonRegistration: undefined })
     }
+    await scheduleRegistration()
 
     return { studentId: student._id, changed }
   },
@@ -336,11 +361,27 @@ type RegistrationOutcome = {
  * "couldn't register — try again".
  */
 export const markPhotonRegistration = internalMutation({
-  args: { studentId: v.id("students"), registration: photonRegistrationV },
+  args: {
+    studentId: v.id("students"),
+    /** The number the outcome is ABOUT, normalized. */
+    phone: v.string(),
+    registration: photonRegistrationV,
+  },
   returns: v.null(),
   handler: async (ctx, args) => {
     const student = await ctx.db.get("students", args.studentId)
     if (!student) return null
+    if (student.phone !== args.phone) {
+      // The number moved on while this registration was in flight. Writing the
+      // outcome now would label the CURRENT number with a result that belongs
+      // to a different one — "we can text this" about a number nobody
+      // registered. The save that changed the phone scheduled its own run.
+      console.warn("[students] stale Photon registration dropped", {
+        studentId: args.studentId,
+        status: args.registration.status,
+      })
+      return null
+    }
     await ctx.db.patch("students", args.studentId, {
       photonRegistration: args.registration,
     })
@@ -401,26 +442,26 @@ async function postContact(phone: string): Promise<RegistrationOutcome> {
 }
 
 /**
- * Register the student's number with Photon so a shared line may message them.
- * Scheduled by `updatePrefs` on every phone save; also safe to run by hand:
- * `npx convex run students:registerContact '{"studentId": "j57a..."}'`.
+ * Register one number with Photon so a shared line may message it.
+ *
+ * The number is an argument rather than a read of the row, so the outcome is
+ * bound to what was actually registered: a student who corrects a typo twice in
+ * a row has two runs in flight, and the slower one must not overwrite the
+ * faster one's verdict. `markPhotonRegistration` drops any outcome whose number
+ * is no longer the student's.
+ *
+ * Scheduled by `updatePrefs` on every phone save and on every re-save that has
+ * not yet landed a registration; also safe to run by hand:
+ * `npx convex run students:registerContact '{"studentId": "j57a...", "phone": "+15551234567"}'`.
  */
 export const registerContact = internalAction({
-  args: { studentId: v.id("students") },
+  args: { studentId: v.id("students"), phone: v.string() },
   returns: photonRegistrationV,
   handler: async (ctx, args): Promise<RegistrationOutcome> => {
-    const student: Doc<"students"> | null = await ctx.runQuery(
-      internal.students.get,
-      { studentId: args.studentId }
-    )
-    if (!student) throw new Error("404: student not found")
-
-    const outcome: RegistrationOutcome = student.phone
-      ? await postContact(student.phone)
-      : { status: "skipped", at: Date.now(), error: "no phone on file" }
-
+    const outcome = await postContact(args.phone)
     await ctx.runMutation(internal.students.markPhotonRegistration, {
       studentId: args.studentId,
+      phone: args.phone,
       registration: outcome,
     })
     return outcome

@@ -392,7 +392,10 @@ describe("registerContact", () => {
     const t = setupTest()
     const studentId = await seed(t, { phone: PHONE })
 
-    const outcome = await t.action(internal.students.registerContact, { studentId })
+    const outcome = await t.action(internal.students.registerContact, {
+      studentId,
+      phone: PHONE,
+    })
 
     expect(outcome.status).toBe("registered")
     expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -412,7 +415,10 @@ describe("registerContact", () => {
     const studentId = await seed(t, { phone: PHONE })
     fetchMock.mockResolvedValue(new Response("photon down", { status: 502 }))
 
-    const outcome = await t.action(internal.students.registerContact, { studentId })
+    const outcome = await t.action(internal.students.registerContact, {
+      studentId,
+      phone: PHONE,
+    })
 
     expect(outcome.status).toBe("failed")
     expect(outcome.error).toContain("502")
@@ -424,7 +430,10 @@ describe("registerContact", () => {
     const studentId = await seed(t, { phone: PHONE })
     fetchMock.mockRejectedValue(new Error("ECONNREFUSED"))
 
-    const outcome = await t.action(internal.students.registerContact, { studentId })
+    const outcome = await t.action(internal.students.registerContact, {
+      studentId,
+      phone: PHONE,
+    })
 
     expect(outcome).toMatchObject({ status: "failed", error: "ECONNREFUSED" })
   })
@@ -434,7 +443,10 @@ describe("registerContact", () => {
     const studentId = await seed(t, { phone: PHONE })
     vi.stubEnv("EVE_VOICE_URL", "")
 
-    const outcome = await t.action(internal.students.registerContact, { studentId })
+    const outcome = await t.action(internal.students.registerContact, {
+      studentId,
+      phone: PHONE,
+    })
 
     expect(outcome).toMatchObject({ status: "skipped", error: "EVE_VOICE_URL not set" })
     expect(fetchMock).not.toHaveBeenCalled()
@@ -446,7 +458,10 @@ describe("registerContact", () => {
     const studentId = await seed(t, { phone: PHONE })
     vi.stubEnv("VOICE_TRIGGER_SECRET", "")
 
-    const outcome = await t.action(internal.students.registerContact, { studentId })
+    const outcome = await t.action(internal.students.registerContact, {
+      studentId,
+      phone: PHONE,
+    })
 
     expect(outcome).toMatchObject({
       status: "skipped",
@@ -455,13 +470,71 @@ describe("registerContact", () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  test("a student with no phone is skipped", async () => {
+  test("an outcome for a number the student no longer has is dropped", async () => {
     const t = setupTest()
-    const studentId = await seed(t)
+    const OLD = "+15559990000"
+    const studentId = await seed(t, { phone: PHONE })
 
-    const outcome = await t.action(internal.students.registerContact, { studentId })
+    // The registration for the previous number lands after the student has
+    // already saved a new one: it must not label the new number.
+    const outcome = await t.action(internal.students.registerContact, {
+      studentId,
+      phone: OLD,
+    })
 
-    expect(outcome).toMatchObject({ status: "skipped", error: "no phone on file" })
+    expect(outcome.status).toBe("registered")
+    expect((await load(t, studentId))?.photonRegistration).toBeUndefined()
+  })
+
+  test("changing the phone clears the old number's registration", async () => {
+    const t = setupTest()
+    const studentId = await seed(t, {
+      phone: "+15559990000",
+      photonRegistration: { status: "registered", at: 1 },
+    })
+
+    await t
+      .withIdentity({ subject: CLERK_ID })
+      .mutation(api.students.updatePrefs, { phone: PHONE })
+
+    // Cleared the moment the number moves — before the new registration lands,
+    // Settings must not claim we can text a number nobody registered.
+    expect((await load(t, studentId))?.photonRegistration).toBeUndefined()
+    await drain(t)
+    expect((await load(t, studentId))?.photonRegistration?.status).toBe("registered")
+  })
+
+  test("re-saving the same number retries a registration that did not land", async () => {
+    const t = setupTest()
+    const studentId = await seed(t, {
+      phone: PHONE,
+      photonRegistration: { status: "failed", at: 1, error: "eve was down" },
+    })
+
+    const result = await t
+      .withIdentity({ subject: CLERK_ID })
+      .mutation(api.students.updatePrefs, { phone: PHONE })
+    await drain(t)
+
+    // Nothing about the student changed, so no change row — but the retry ran.
+    expect(result.changed).toEqual([])
+    expect(await changesFor(t, studentId)).toHaveLength(0)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect((await load(t, studentId))?.photonRegistration?.status).toBe("registered")
+  })
+
+  test("re-saving a number that is already registered does not POST again", async () => {
+    const t = setupTest()
+    await seed(t, {
+      phone: PHONE,
+      photonRegistration: { status: "registered", at: 1 },
+    })
+
+    await t
+      .withIdentity({ subject: CLERK_ID })
+      .mutation(api.students.updatePrefs, { phone: PHONE })
+    await drain(t)
+
     expect(fetchMock).not.toHaveBeenCalled()
   })
 

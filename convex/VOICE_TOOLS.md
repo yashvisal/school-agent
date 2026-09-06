@@ -642,6 +642,15 @@ and creates it only if absent (`POST /projects/{projectId}/users/` with
 
 Only the last four digits of a number are ever logged.
 
+The outcome is bound to the number it was for: `registerContact` takes the phone
+as an argument rather than reading the row, and the outcome is discarded if the
+student's number has moved on since — a correction typed twice in a row leaves
+two runs in flight, and the slower one must not label the newer number. Changing
+a phone clears `photonRegistration` in the same mutation, so Settings never shows
+the old number's verdict against the new one. Re-saving an unchanged number whose
+registration has not landed (`failed`, `skipped`, or absent) schedules another
+attempt and writes no change row — that is the "try again" path.
+
 Core records the outcome on `students.photonRegistration`
 (`{ status: "registered" | "failed" | "skipped", at, error? }`) via an internal
 mutation — **not** through `changes`: this is routing bookkeeping about our own
@@ -652,7 +661,7 @@ again". Same skipped/failed semantics as §8: no `EVE_VOICE_URL` or no
 non-2xx or a 15s timeout records `failed`, and re-saving the number retries.
 
 Re-run by hand with
-`npx convex run students:registerContact '{"studentId": "j57a..."}'`.
+`npx convex run students:registerContact '{"studentId": "j57a...", "phone": "+15551234567"}'`.
 
 ## 9. Deployment environment
 

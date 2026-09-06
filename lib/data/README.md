@@ -52,10 +52,16 @@ It is written outside `changes` — routing bookkeeping, like `inboundCount` —
 is absent until the first save. Read it off `api.auth.viewer` (unchanged: it
 returns the whole student row, so the new fields — `morningHourLocal`,
 `checkInPreference`, `photonRegistration` — are already there). Settings should read it as: `registered` → "we
-can text this number"; `failed` → "couldn't register — try again" (re-saving the
-same number retries); `skipped` → this deployment has no Voice attached, so say
-nothing. It arrives asynchronously, a moment after `updatePrefs` returns, so the
-subscription will flip from absent to a status on its own.
+can text this number"; `failed` → "couldn't register — try again"; `skipped` →
+this deployment has no Voice attached, so say nothing. It arrives asynchronously,
+a moment after `updatePrefs` returns, so the subscription will flip from absent
+to a status on its own.
+
+"Try again" is literally a re-save: submitting the same number when the status is
+`failed`, `skipped`, or absent schedules another attempt and returns
+`changed: []` (nothing about the student changed, so no change row). Submitting a
+number that is already `registered` does nothing. Changing the number clears the
+field first, so the UI shows "registering…" rather than the old number's verdict.
 
 ### Known adapter caveats
 
