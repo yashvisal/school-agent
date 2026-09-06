@@ -6,11 +6,26 @@
  * the documented contract in `lib/data/README.md`), so surface exactly that
  * line rather than a house-style paraphrase that would drift from it.
  */
-export function errorMessage(cause: unknown): string {
+function thrownLine(cause: unknown): string {
   const raw = cause instanceof Error ? cause.message : String(cause)
   const thrown = raw.match(/Uncaught (?:Convex)?Error:\s*(.*)/)
-  const line = (thrown?.[1] ?? raw.split("\n")[0] ?? raw).trim()
+  return (thrown?.[1] ?? raw.split("\n")[0] ?? raw)
+    .trim()
+    .replace(/^\[Request ID: [^\]]+\]\s*/, "")
+}
+
+export function errorMessage(cause: unknown): string {
   // Strip the numeric status Core prefixes for the caller's benefit; "400: "
   // in front of a sentence is noise to the person reading it.
-  return line.replace(/^\[Request ID: [^\]]+\]\s*/, "").replace(/^\d{3}:\s*/, "")
+  return thrownLine(cause).replace(/^\d{3}:\s*/, "")
+}
+
+/**
+ * The status Core prefixed, when it prefixed one. Not every error is a failure
+ * the UI should paint red: a `429` from `sources.resync` means the button was
+ * pressed inside its cooldown, which is information, not a broken source.
+ */
+export function errorStatus(cause: unknown): number | undefined {
+  const code = thrownLine(cause).match(/^(\d{3}):\s*/)?.[1]
+  return code ? Number(code) : undefined
 }

@@ -25,7 +25,7 @@ import {
 import { api } from "@/convex/_generated/api"
 import type { Id } from "@/convex/_generated/dataModel"
 import { agoLabel } from "@/lib/format"
-import { errorMessage } from "@/lib/errors"
+import { errorMessage, errorStatus } from "@/lib/errors"
 import { useCourses, useSources } from "@/lib/data/hooks"
 import type { Course, Source, SourceHealth } from "@/lib/data/types"
 
@@ -67,6 +67,11 @@ function SourceCard({ source }: { source: Source }) {
     null
   )
   const [error, setError] = React.useState<string | null>(null)
+  /* A `429` is not a failure of the source — it is this button being pressed
+   * inside its own cooldown (5 minutes for an upload, whose re-extraction costs
+   * a model call; 60s for a feed). Kept apart from `error` so the card does not
+   * paint a healthy source as broken, and cleared by the next click that lands. */
+  const [cooldown, setCooldown] = React.useState<string | null>(null)
   const health = HEALTH[source.health]
 
   const resyncing =
@@ -81,14 +86,20 @@ function SourceCard({ source }: { source: Source }) {
 
   const onResync = async () => {
     setError(null)
+    setCooldown(null)
     setInFlight(true)
     setPending({ polledAt: source.lastPolledAt })
     try {
       // The mutation's own health patch is committed by the time this resolves,
       // so `resyncing` never flickers off between the two.
       await resync({ sourceId: source._id as Id<"sources"> })
+      setCooldown(null)
     } catch (cause) {
-      setError(errorMessage(cause))
+      // Core writes the cooldown sentence as UI copy ("re-sync was requested
+      // 12s ago; try again in 48s"), so it is shown as written rather than
+      // paraphrased into a countdown Face would have to keep in sync.
+      if (errorStatus(cause) === 429) setCooldown(errorMessage(cause))
+      else setError(errorMessage(cause))
       setPending(null)
     } finally {
       setInFlight(false)
@@ -152,7 +163,12 @@ function SourceCard({ source }: { source: Source }) {
             {source.enabled ? "Enabled" : "Disabled"}
           </span>
         </span>
-        <span className="ml-auto">
+        <span className="ml-auto flex items-center gap-2">
+          {cooldown && (
+            <span role="status" className="text-[11.5px] text-ink-3">
+              {cooldown}
+            </span>
+          )}
           <Button
             size="xs"
             variant="secondary"
