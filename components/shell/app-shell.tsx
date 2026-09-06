@@ -5,6 +5,7 @@ import { SignInButton, Show } from "@clerk/nextjs"
 import { useDialKit } from "dialkit"
 
 import { AppRail } from "@/components/shell/app-rail"
+import { EnsureStudent } from "@/components/shell/ensure-student"
 import { AppSidebar } from "@/components/shell/app-sidebar"
 import { ThemeToggle } from "@/components/shell/theme-toggle"
 
@@ -39,6 +40,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <SignedOutPrompt />
       </Show>
       <Show when="signed-in">
+        {/* Provisions the students row on first sign-in; renders nothing. */}
+        <EnsureStudent />
         <main
           className="flex h-[100dvh] bg-canvas text-ink lg:pl-0"
           style={{ padding: dials.gutter, gap: dials.gutter }}
