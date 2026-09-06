@@ -354,6 +354,12 @@ const TASK_KEYS = [
   "createdBy",
 ] as const
 
+/**
+ * The student-row fields a change may write. `inboundCount` and
+ * `photonRegistration` are deliberately absent: they are routing bookkeeping
+ * written by their own internal mutations, not facts about the student's
+ * semester, and nothing about them is for a student to approve.
+ */
 const STUDENT_KEYS = [
   "timezone",
   "phone",
@@ -363,6 +369,7 @@ const STUDENT_KEYS = [
   "availability",
   "status",
   "morningHourLocal",
+  "checkInPreference",
 ] as const
 
 /**

@@ -40,7 +40,39 @@ empty array.
 | `api.changes.approveMany` | still needed for onboarding bulk-approve                                   |
 | `api.changes.propose`     | exists as `internal.changes.propose`; a public `origin: "manual"` wrapper is still needed for the Fix button |
 | `api.ingest.sources.add` / `setEnabled` | ✅                                                          |
-| `api.students.updatePrefs`| still needed for Settings                                                  |
+| `api.students.updatePrefs`| ✅ `{ phone?, timezone?, morningHourLocal?, availability?, checkInPreference?, semesterStart?, semesterEnd? }` — all optional, identity-scoped (no `studentId`). Returns `{ studentId, changed: string[] }`; `changed: []` means nothing moved and no change row was written. Throws `400` on an unusable phone/timezone/hour/date and `409: phone already in use`. |
+| `api.students.ensure`     | ✅ `{ timezone? }` → `Id<"students">`. **Face must call it once after sign-in** — every other query returns empty and `updatePrefs` throws `404` until the row exists. |
+
+### `photonRegistration` — for the Settings UI
+
+Saving a phone schedules its registration with Photon (a shared line can only
+message a registered user), and the outcome lands on the student row as
+`photonRegistration: { status: "pending" | "registered" | "failed" | "skipped", at, error? }`.
+It is written outside `changes` — routing bookkeeping, like `inboundCount` — and
+is absent until the first save. Read it off `api.auth.viewer` (unchanged: it
+returns the whole student row, so the new fields — `morningHourLocal`,
+`checkInPreference`, `photonRegistration` — are already there).
+
+| `status` | What Settings shows |
+| --- | --- |
+| absent | Nothing yet — no number has been saved. |
+| `pending` | "Registering…" — written in the same transaction that schedules the attempt, so it appears the instant `updatePrefs` returns. |
+| `registered` | "We can text this number." |
+| `failed` | "Couldn't register — try again." `error` carries the reason; it is operator detail, not student-facing copy. |
+| `skipped` | This deployment has no Voice attached. Say nothing. |
+
+The terminal status replaces `pending` a moment later, so the subscription moves
+`pending` → `registered`/`failed` on its own with no refetch.
+
+"Try again" is literally a re-save: submitting the same number when the status is
+`failed`, `skipped`, or absent schedules another attempt and returns
+`changed: []` (nothing about the student changed, so no change row). Submitting a
+number that is already `registered` does nothing. **One attempt at a time**: a
+re-save while a `pending` attempt is under a minute old also returns normally
+with `changed: []` and schedules nothing — a press-happy button must not spend
+Photon's project-wide 5 rps on one number, so the button can stay enabled and
+show "Registering…" instead. Changing the number goes to `pending` immediately
+and never waits behind the old number's attempt.
 
 ### Known adapter caveats
 
