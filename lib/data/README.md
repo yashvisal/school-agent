@@ -83,10 +83,12 @@ and never waits behind the old number's attempt.
 - **`change.confidence`** comes from `after.provenance.confidence` when the extractor supplied
   one; otherwise the "N% confident" line simply doesn't render.
 - **`accent`** is a deterministic client-side palette by course index, not stored.
-- **Change grouping** — the Core half exists, the UI half does not yet. `Change.batchId`
-  carries one id per extraction run (`${sourceId}:${snapshotId}`) and rides through the feed,
-  and `approveMany({ batchId })` approves a whole run. **The feed does not group by it today:**
-  every change still renders as its own row. The grouped card ("18 items from CHEM 202's
-  syllabus" — a client-side `groupBy(batchId)` for the count, one button calling
-  `approveMany({ batchId })`) is being built in the Face forms PR. Changes that were not part
-  of a run (chat, manual, a single Canvas diff) have no `batchId` and stay ungrouped.
+- **Change grouping** is done on both sides. `Change.batchId` carries one id per extraction
+  run (`${sourceId}:${snapshotId}`), and `change-feed.tsx` groups pending rows by it with a
+  client-side `groupBy` — one `BatchCard` per run, labelled from the course code and the
+  origin ("18 items from CHEM 202's syllabus"), expanding to the individual rows and approving
+  the lot with `approveMany({ batchId })`. Batch mode rather than a list of ids, so a row that
+  landed after the card rendered is covered too; a run past one page comes back
+  `continued: true` and the card reads "Finishing up…" until the subscription has no pending
+  rows left for it. A batch of one renders as a plain row. Changes that were not part of a run
+  (chat, manual, a single Canvas diff) have no `batchId` and stay ungrouped.

@@ -24,9 +24,9 @@ Every surface below is one of:
 | Inbound dedupe, contact warming        | integrated            | Core-owned; gates the push until the student has texted three times.                                                                                   |
 | Usage logging (Voice)                  | integrated            | Idempotent per model step. The workspace agent's hook is still a console stub.                                                                         |
 | Face shell, two-mode nav, live queries | integrated            | Dashboard, Semester, course Overview, Connectors, per-course Library placeholder, chats in the viewport; every data hook is a Convex subscription except chats. |
-| Web approvals                          | integrated            | Approve works. **Fix** has no correction editor; **Re-sync** only animates; **Settings** is local state with sample values.                             |
+| Web approvals                          | implemented           | Approve, bulk-approve by `batchId`, and an inline **Fix** editor (`proposeManual`, superseding the card it answers). **Re-sync** runs the real poll and stays busy until the source reports one. Types and tests pass; **not yet exercised end to end on the dev deployment**, so not `integrated`.  |
 | Tasks on the Dashboard                 | **not written**       | Nothing persists Voice's picks; the Today panel is empty by construction. Fix in Slice 1.                                                               |
-| Student provisioning                   | **missing**           | Nothing in the app calls `students.ensure`; a fresh Clerk sign-up has no student row and every upload mutation throws. Fix in Slice 2.                  |
+| Student provisioning                   | implemented           | The shell calls `students.ensure` once per session when Convex reports a signed-in identity with a null viewer, passing the browser's IANA zone.        |
 | Onboarding flow                        | deferred → Slice 2    | Backend pieces exist (uploads, bulk approve, past-deadline resolution); no route, no screens.                                                           |
 | Workspace agent + Spike B              | implemented           | Per-session isolation and streaming proven; tools are probes; `propose_change` and usage write nowhere; browser channel 401s in any deployment.        |
 | Course workspace as a builder          | deferred → Slice 4    | Redefined 2026-09-04: [workspace.md](./workspace.md).                                                                                                  |
@@ -97,6 +97,5 @@ Production is live: the Next app and both eve agents on Vercel (`school-agent-ya
 ## Plan-doc reconciliation (fold into the PRs above)
 
 - core.md definition-of-done boxes: tick what shipped; the only honest unticked items are live validation and the mid-semester path's live run.
-- `lib/data/README.md`: `approveMany` exists; the remaining asks are `updatePrefs`, `resync`, the manual `propose` wrapper, and `batchId`.
-- Settings copy claims the app reads fixtures; it does not.
+- `lib/data/README.md`: `updatePrefs`, `resync`, `proposeManual` and `batchId` all landed and are wired in Face, including the re-save retry for a failed Photon registration and `approveMany`'s `continued` continuation. Nothing from Slice 1 item 5 is waiting on Core.
 - face.md Milestone 3 and vision §8/§12 now point at workspace.md.
