@@ -382,3 +382,26 @@ describe("sources.resync in flight", () => {
     })
   })
 })
+
+describe("sources.resync stored document", () => {
+  test("an upload whose blob is gone is refused, and the cooldown is not burned", async () => {
+    const t = setupTest()
+    const { studentId } = await seed(t)
+    const storageId = await t.run(async (ctx) =>
+      ctx.storage.store(new Blob(["# syllabus"], { type: "text/markdown" }))
+    )
+    const sourceId = await addSource(t, studentId, "syllabus", {
+      identity: "syllabus:unassigned",
+      storageId,
+    })
+    await t.run(async (ctx) => ctx.storage.delete(storageId))
+    const as = t.withIdentity({ subject: CLERK_ID })
+
+    await expect(as.mutation(api.ingest.sources.resync, { sourceId })).rejects.toThrow(
+      "400: this upload's stored document is missing from storage"
+    )
+    expect(await scheduled(t)).toHaveLength(0)
+    const source = await t.run(async (ctx) => ctx.db.get("sources", sourceId))
+    expect(source?.lastResyncRequestedAt).toBeUndefined()
+  })
+})

@@ -307,6 +307,12 @@ export const resync = mutation({
       if (!storageId) {
         throw new Error("400: this upload has no stored document to re-extract")
       }
+      // The config's id is a string; the blob behind it can be gone. Refusing
+      // here (which also rolls back the stamp above) beats scheduling a run that
+      // 404s in the background and leaves the card "syncing" until the cooldown.
+      if ((await ctx.db.system.get(storageId)) === null) {
+        throw new Error("400: this upload's stored document is missing from storage")
+      }
       await scheduleReextract(ctx.scheduler, source.kind, args.sourceId, storageId)
     } else {
       // `calendar` is registered by the schema but has no adapter yet (core.md
