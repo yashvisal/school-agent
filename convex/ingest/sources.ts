@@ -1,10 +1,11 @@
 import { v } from "convex/values"
 
-import type { Doc } from "../_generated/dataModel"
+import type { Doc, Id } from "../_generated/dataModel"
 import { internalMutation, internalQuery, mutation, query } from "../_generated/server"
 import { getCurrentStudent, requireStudent } from "../lib/auth"
 import { requireFetchableUrl } from "../lib/net"
 import { sourceConfigKindV, sourceHealthV } from "../lib/validators"
+import { isPollableKind, isUploadKind, schedulePoll, scheduleReextract } from "./dispatch"
 
 /**
  * Source registration and health (core.md "State model": `sources` — studentId,
@@ -215,6 +216,121 @@ export const setEnabled = mutation({
     return null
   },
 })
+
+/**
+ * "Re-sync now" from the Face connectors view.
+ *
+ * Feeds (canvas, ical, site) run exactly the poll the cron would have run for
+ * this one source; uploads (syllabus, schedule) re-run their extraction from
+ * the `storageId` the upload already stored on the config. Both are scheduled,
+ * not awaited: a poll is a network call plus a model call, and the tap that
+ * asked for it should return immediately.
+ *
+ * Health is set to `unknown` synchronously so the card can show "syncing…" the
+ * moment the mutation lands; the poll or extraction writes the real health when
+ * it finishes, exactly as it does on the cron path.
+ *
+ * Rate-limited per source, because the button is cheap to press and the work
+ * behind it is not. An upload re-sync re-runs the extraction past the snapshot
+ * hash by design (otherwise an unchanged document is a no-op), so every tap is
+ * a model call whether or not the document moved — five minutes. A feed poll
+ * only costs a fetch, so it gets a shorter one, enough to absorb a double-tap
+ * and an impatient student.
+ */
+const RESYNC_COOLDOWN_MS = { upload: 5 * 60_000, poll: 60_000 } as const
+
+/** A "re-sync requested" health older than this is an abandoned run, not a live one. */
+const RESYNC_IN_FLIGHT_MAX_MS = 15 * 60_000
+
+export const resync = mutation({
+  args: { sourceId: v.id("sources") },
+  returns: v.object({ scheduled: v.boolean() }),
+  handler: async (ctx, args) => {
+    const source = await ctx.db.get("sources", args.sourceId)
+    if (!source) throw new Error("404: source not found")
+    // Ownership on the row, not just "is someone signed in": `sourceId` is a
+    // caller-supplied opaque string, and re-syncing someone else's Canvas token
+    // is both a write on their account and a probe of ours.
+    await requireStudent(ctx, source.studentId)
+
+    // A disabled source is disabled on every path. Re-syncing one would poll a
+    // feed the student explicitly switched off and write changes from it.
+    if (!source.enabled) throw new Error("400: source is disabled; enable it first")
+
+    const now = Date.now()
+    const cooldownMs = isUploadKind(source.kind)
+      ? RESYNC_COOLDOWN_MS.upload
+      : RESYNC_COOLDOWN_MS.poll
+    const since = source.lastResyncRequestedAt
+    if (since !== undefined && now - since < cooldownMs) {
+      const ago = Math.round((now - since) / 1000)
+      const wait = Math.ceil((cooldownMs - (now - since)) / 1000)
+      // The message is the UI copy: Face shows it verbatim on the card.
+      throw new Error(
+        `429: re-sync was requested ${ago}s ago; try again in ${wait}s`
+      )
+    }
+
+    // Past the cooldown, an UPLOAD re-extraction that is still running must not
+    // be joined by a second one: two concurrent model calls on the same
+    // document is the exact bill the cooldown exists to prevent. "Running" is
+    // the health this mutation wrote and the adapter has not yet replaced; a
+    // marker older than `RESYNC_IN_FLIGHT_MAX_MS` is an abandoned run, so a
+    // crash cannot wedge the button. Feed polls are a fetch, not a model call,
+    // and their own cooldown is enough.
+    const inFlight =
+      isUploadKind(source.kind) &&
+      source.health.status === "unknown" &&
+      source.health.message === "re-sync requested" &&
+      now - source.health.at < RESYNC_IN_FLIGHT_MAX_MS
+    if (inFlight) {
+      const ago = Math.round((now - source.health.at) / 1000)
+      throw new Error(
+        `409: re-sync is still running (requested ${ago}s ago); wait for it to finish`
+      )
+    }
+
+    // Stamped before anything is scheduled, so the cooldown starts the moment
+    // the request is accepted. A request that is then REFUSED (no stored
+    // document, no adapter) throws, which rolls the stamp back with the rest of
+    // the transaction — a rejected tap must not burn the student's next five
+    // minutes.
+    await ctx.db.patch("sources", args.sourceId, {
+      lastResyncRequestedAt: now,
+      health: { status: "unknown", message: "re-sync requested", at: now },
+    })
+
+    if (isPollableKind(source.kind)) {
+      await schedulePoll(ctx.scheduler, source.kind, args.sourceId)
+    } else if (isUploadKind(source.kind)) {
+      const storageId = storageIdOf(source.config)
+      if (!storageId) {
+        throw new Error("400: this upload has no stored document to re-extract")
+      }
+      // The config's id is a string; the blob behind it can be gone. Refusing
+      // here (which also rolls back the stamp above) beats scheduling a run that
+      // 404s in the background and leaves the card "syncing" until the cooldown.
+      if ((await ctx.db.system.get(storageId)) === null) {
+        throw new Error("400: this upload's stored document is missing from storage")
+      }
+      await scheduleReextract(ctx.scheduler, source.kind, args.sourceId, storageId)
+    } else {
+      // `calendar` is registered by the schema but has no adapter yet (core.md
+      // "Adapters" #6, Milestone 2). Refusing beats silently doing nothing.
+      throw new Error(`400: re-sync is not supported for ${source.kind} sources yet`)
+    }
+
+    return { scheduled: true }
+  },
+})
+
+const storageIdOf = (config: unknown): Id<"_storage"> | undefined => {
+  const value =
+    config && typeof config === "object" && !Array.isArray(config)
+      ? (config as Record<string, unknown>).storageId
+      : undefined
+  return typeof value === "string" ? (value as Id<"_storage">) : undefined
+}
 
 // ---------------------------------------------------------------------------
 // internal

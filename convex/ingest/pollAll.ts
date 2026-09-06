@@ -2,6 +2,7 @@ import { v } from "convex/values"
 
 import { internal } from "../_generated/api"
 import { internalAction } from "../_generated/server"
+import { POLLABLE_KINDS, schedulePoll } from "./dispatch"
 
 /**
  * The polling sweep the cron drives (`convex/crons.ts`, every 30 minutes —
@@ -31,7 +32,7 @@ export const pollAll = internalAction({
     // only changes when the student uploads a new one, which is an event, not a
     // schedule. Re-running them on a cron would re-extract identical markdown
     // every 30 minutes and bill for it.
-    const kinds = args.kinds ?? ["canvas", "ical", "site"]
+    const kinds = args.kinds ?? [...POLLABLE_KINDS]
     const sources = await ctx.runQuery(internal.ingest.sources.listEnabled, {
       kinds,
       ...(args.limit !== undefined ? { limit: args.limit } : {}),
@@ -41,22 +42,11 @@ export const pollAll = internalAction({
     let ical = 0
     let site = 0
     for (const source of sources) {
-      if (source.kind === "canvas") {
-        await ctx.scheduler.runAfter(0, internal.ingest.canvas.poll, {
-          sourceId: source._id,
-        })
-        canvas++
-      } else if (source.kind === "ical") {
-        await ctx.scheduler.runAfter(0, internal.ingest.ical.poll, {
-          sourceId: source._id,
-        })
-        ical++
-      } else if (source.kind === "site") {
-        await ctx.scheduler.runAfter(0, internal.ingest.site.run, {
-          sourceId: source._id,
-        })
-        site++
-      }
+      if (source.kind === "canvas") canvas++
+      else if (source.kind === "ical") ical++
+      else if (source.kind === "site") site++
+      else continue
+      await schedulePoll(ctx.scheduler, source.kind, source._id)
     }
 
     return { scheduled: canvas + ical + site, canvas, ical, site }

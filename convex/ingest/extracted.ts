@@ -120,6 +120,19 @@ export type DocumentIngestResult = {
   dropped: { title: string; reason: string }[]
 }
 
+/**
+ * One extraction run's id, stamped on every change the run proposes so the web
+ * queue can show and approve a whole parse as one card (core.md "Adapters").
+ *
+ * Keyed on the SNAPSHOT rather than a fresh random id: the snapshot is the run's
+ * stored artifact, so a forced re-parse of an unchanged document (the re-sync
+ * path) lands in the same batch instead of fracturing one syllabus into two
+ * cards, and any change can be traced back to the document that produced it
+ * with no extra column.
+ */
+const batchIdFor = (sourceId: Id<"sources">, snapshotId: Id<"snapshots">) =>
+  `${sourceId}:${snapshotId}`
+
 const emptyResult = (
   snapshotId: Id<"snapshots">,
   created: boolean
@@ -185,6 +198,7 @@ export const ingestDocument = internalMutation({
       ...(fetchedAt !== undefined ? { fetchedAt } : {}),
     })
     if (!created && !args.force) return emptyResult(snapshotId, false)
+    const batchId = batchIdFor(args.sourceId, snapshotId)
 
     const normalized = normalizeSyllabusExtraction({
       extraction: parsed.data,
@@ -239,6 +253,7 @@ export const ingestDocument = internalMutation({
         },
         origin: args.origin,
         snapshotIds: [snapshotId],
+        batchId,
         reason:
           `This ${args.origin === "site" ? "course site" : "syllabus"} is for ` +
           `"${normalized.course.name}", which isn't in your courses yet. ` +
@@ -315,6 +330,7 @@ export const ingestDocument = internalMutation({
       snapshotIds: [snapshotId],
       courseIds,
       fallbackCourseId: courseId,
+      batchId,
     })
 
     return { ...result, ...outcome }
@@ -494,6 +510,7 @@ export const ingestSchedule = internalMutation({
       after: { classBlocks: blocks },
       origin: "schedule",
       snapshotIds: [snapshotId],
+      batchId: batchIdFor(args.sourceId, snapshotId),
       reason:
         describeSchedule(blocks) +
         (parsed.data.timezoneNote ? ` The upload notes: "${parsed.data.timezoneNote}".` : "") +

@@ -51,6 +51,20 @@ export default defineSchema({
 
   changes: defineTable(changeFields)
     .index("by_student_status", ["studentId", "status"])
+    // Bulk-approving one extraction run ("18 items from CHEM 202's syllabus").
+    // Student first, so a caller-supplied `batchId` can never select across
+    // tenants however it is spelled. The last two columns are what let the
+    // drain terminate AND finish without a cursor: approving a row changes its
+    // `status`, and a row that fails to apply gets an `applyError`, so either
+    // way it leaves the range being read and the next page is strictly further
+    // on. Queried as `.eq(studentId).eq(status).eq(batchId).eq(applyError,
+    // undefined)` — absent is a value an index can match.
+    .index("by_student_status_batchId_applyError", [
+      "studentId",
+      "status",
+      "batchId",
+      "applyError",
+    ])
     .index("by_student_createdAt", ["studentId", "createdAt"])
     // "has anything landed since the plan was computed?" — the cached nightly
     // snapshot is invalidated by a change resolved after `planRuns.computedAt`.

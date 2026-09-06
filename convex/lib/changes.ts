@@ -43,6 +43,8 @@ export type ProposeChangeInput = {
   snapshotIds?: Id<"snapshots">[]
   reason?: string
   conflict?: boolean
+  /** One extraction run's id, so the queue can approve a whole parse at once. */
+  batchId?: string
   /** The student confirmed this in the same chat exchange it was born in. */
   confirmedInline?: boolean
   /** REQUIRED with `confirmedInline`: what the student actually said. */
@@ -155,6 +157,7 @@ export async function proposeChangeInternal(
     snapshotIds: input.snapshotIds ?? [],
     reason: input.reason,
     conflict: input.conflict,
+    batchId: input.batchId,
     createdAt: now,
     resolvedAt: status === "pending" ? undefined : now,
     resolvedVia,
@@ -190,6 +193,14 @@ export async function approveChangeInternal(
   })
   const fresh = await ctx.db.get("changes", changeId)
   if (fresh) await applyChange(ctx, fresh)
+  // Cleared only once the apply above has actually gone through: a row that
+  // failed in a batch drain and is later approved on its own — after the
+  // student fixed whatever the message named — stops carrying a stale error.
+  // If `applyChange` throws, this line is never reached and the whole approval
+  // rolls back, error and all.
+  if (change.applyError) {
+    await ctx.db.patch("changes", changeId, { applyError: undefined })
+  }
   return { changeId, status: "approved" }
 }
 
@@ -453,7 +464,7 @@ function provenanceFor(change: Doc<"changes">, after: Bag) {
 // ---------------------------------------------------------------------------
 
 /** Tables whose rows carry a `studentId` and are therefore student-scoped. */
-type OwnedTable = Extract<TableNames, "deadlines" | "courses" | "tasks">
+export type OwnedTable = Extract<TableNames, "deadlines" | "courses" | "tasks">
 
 const NOT_YOURS = "403: entity does not belong to student"
 
@@ -465,8 +476,12 @@ const NOT_YOURS = "403: entity does not belong to student"
  * B's row, since ids are opaque strings the caller supplies. Returns `null` for
  * a row that does not exist (an already-deleted target is a no-op, not an
  * error); throws when the row exists and belongs to someone else.
+ *
+ * Exported because the manual-edit path (`changes.proposeManual`) has to prove
+ * the same thing at the *front* door, before it writes a change row it is about
+ * to auto-approve — one definition of "yours", not two.
  */
-async function loadOwned<T extends OwnedTable>(
+export async function loadOwned<T extends OwnedTable>(
   ctx: MutationCtx,
   table: T,
   id: Id<T>,

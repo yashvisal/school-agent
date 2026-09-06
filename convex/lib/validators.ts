@@ -389,11 +389,27 @@ export const changeFields = {
   snapshotIds: v.array(v.id("snapshots")),
   reason: v.optional(v.string()),
   conflict: v.optional(v.boolean()),
+  /**
+   * One extraction run's worth of changes, so the web queue can show and
+   * approve a whole parse as one card ("18 items from CHEM 202's syllabus")
+   * instead of eighteen. `${sourceId}:${snapshotId}` — the snapshot IS the run's
+   * stored artifact, so a forced re-parse of the same document reuses the same
+   * batch rather than fracturing the card in two. Absent on changes that were
+   * not part of a run (chat, manual, a single Canvas diff).
+   */
+  batchId: v.optional(v.string()),
   createdAt: v.number(),
   resolvedAt: v.optional(v.number()),
   resolvedVia: v.optional(resolvedViaV),
   /** Present iff the change was approved via `confirmedInline`. */
   evidence: v.optional(inlineEvidenceV),
+  /**
+   * Why this change could not be applied on its last attempt. Bookkeeping, NOT
+   * a status: the row stays `pending`, so the student's card survives and can
+   * say "couldn't apply: …" instead of vanishing. Set by the batch drain when
+   * one row's apply throws, and cleared the moment an approval succeeds.
+   */
+  applyError: v.optional(v.object({ message: v.string(), at: v.number() })),
 }
 
 export const sourceFields = {
@@ -403,6 +419,14 @@ export const sourceFields = {
   config: v.any(),
   enabled: v.boolean(),
   lastPolledAt: v.optional(v.number()),
+  /**
+   * When the student last tapped "Re-sync now". Bookkeeping, not a fact about
+   * a source: it exists so `ingest.sources.resync` can enforce a cooldown. An
+   * upload re-sync is a model call every time (the extraction is re-run past
+   * the snapshot hash, or the button does nothing), so a held button would bill
+   * for a document that has not changed.
+   */
+  lastResyncRequestedAt: v.optional(v.number()),
   health: sourceHealthV,
 }
 

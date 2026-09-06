@@ -193,6 +193,13 @@ export type Change = {
   toolLabel: string
   confidence?: number
   snapshotIds: Id[]
+  /**
+   * The extraction run this change came from, when it came from one — so the
+   * queue can group a whole syllabus parse into a single card and approve it
+   * with `api.changes.approveMany({ batchId })`. Absent for chat, manual, and
+   * single-source diffs.
+   */
+  batchId?: string
   /** ISO 8601 */
   at: string
 }
