@@ -101,8 +101,20 @@ const SCHEDULE_KEYS: ReadonlySet<PrefKey> = new Set<PrefKey>([
   "semesterEnd",
 ])
 
+/**
+ * A bare UTC offset — `"+05:30"`, `"-0800"`. `Intl` accepts these, but an offset
+ * is not a zone: it does not know when the student's clocks change, so a
+ * morning hour stored against one drifts by an hour twice a year and the push
+ * lands before the student is awake. `Etc/GMT+5` is a real zone name and is
+ * left alone; a student who genuinely wants fixed UTC can say so that way.
+ */
+const FIXED_OFFSET = /^[+-]\d{2}(:?\d{2})?$/
+
 /** A real IANA zone, per the runtime's own tz database. */
 function assertTimezone(timezone: string): void {
+  if (FIXED_OFFSET.test(timezone)) {
+    throw new Error("400: timezone must be an IANA zone like America/New_York")
+  }
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: timezone })
   } catch {

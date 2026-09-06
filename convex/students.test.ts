@@ -267,6 +267,32 @@ describe("updatePrefs", () => {
     expect(await changesFor(t, studentId)).toHaveLength(0)
   })
 
+  test("a bare UTC offset is not a timezone", async () => {
+    const t = setupTest()
+    const studentId = await seed(t)
+    const as = t.withIdentity({ subject: CLERK_ID })
+
+    // Intl accepts all of these, but none of them knows when the student's
+    // clocks change, so the morning push would drift twice a year.
+    for (const timezone of ["+05:30", "-0800", "+00", "-05:00"]) {
+      await expect(
+        as.mutation(api.students.updatePrefs, { timezone })
+      ).rejects.toThrow("400: timezone must be an IANA zone")
+    }
+    expect((await load(t, studentId))?.timezone).toBe(TZ)
+  })
+
+  test("real zone names are accepted, including the Etc ones", async () => {
+    const t = setupTest()
+    await seed(t)
+    const as = t.withIdentity({ subject: CLERK_ID })
+    for (const timezone of ["America/Chicago", "Europe/Berlin", "Etc/GMT+5", "UTC"]) {
+      await expect(
+        as.mutation(api.students.updatePrefs, { timezone })
+      ).resolves.toMatchObject({ changed: ["timezone"] })
+    }
+  })
+
   test("the morning hour must be a whole hour of the day", async () => {
     const t = setupTest()
     await seed(t)
