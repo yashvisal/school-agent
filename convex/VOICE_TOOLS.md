@@ -645,14 +645,20 @@ Only the last four digits of a number are ever logged.
 The outcome is bound to the number it was for: `registerContact` takes the phone
 as an argument rather than reading the row, and the outcome is discarded if the
 student's number has moved on since — a correction typed twice in a row leaves
-two runs in flight, and the slower one must not label the newer number. Changing
-a phone clears `photonRegistration` in the same mutation, so Settings never shows
-the old number's verdict against the new one. Re-saving an unchanged number whose
-registration has not landed (`failed`, `skipped`, or absent) schedules another
-attempt and writes no change row — that is the "try again" path.
+two runs in flight, and the slower one must not label the newer number.
+
+Scheduling an attempt writes `photonRegistration: { status: "pending", at }` in
+the same transaction, which is both what Settings renders as "Registering…" and
+the lock: a re-save while a `pending` attempt is younger than
+`REGISTRATION_RETRY_MS` (60s) returns normally and schedules nothing, so one
+student cannot spend Photon's project-wide 5 rps on their own number. Re-saving
+an unchanged number whose registration has not landed (`failed`, `skipped`, or
+absent) does schedule another attempt and writes no change row — that is the
+"try again" path. A changed phone goes straight to `pending`, replacing the old
+number's verdict, so Settings never shows it against the new number.
 
 Core records the outcome on `students.photonRegistration`
-(`{ status: "registered" | "failed" | "skipped", at, error? }`) via an internal
+(`{ status: "pending" | "registered" | "failed" | "skipped", at, error? }`) via an internal
 mutation — **not** through `changes`: this is routing bookkeeping about our own
 transport, like `inboundCount`, not a fact about the student's semester. Face's
 Settings reads it to say "we can text this number" or "couldn't register — try

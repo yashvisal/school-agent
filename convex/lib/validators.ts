@@ -93,7 +93,14 @@ export const checkInPreferenceV = v.union(
  * like `inboundCount`. Settings reads it to say whether we can text this number.
  */
 export const photonRegistrationV = v.object({
+  /**
+   * `pending` is written by `updatePrefs` in the same transaction that schedules
+   * the attempt: it is what makes the retry path safe to expose to a button
+   * (one in-flight registration per student) and what Face shows as
+   * "Registering…".
+   */
   status: v.union(
+    v.literal("pending"),
     v.literal("registered"),
     v.literal("failed"),
     v.literal("skipped")

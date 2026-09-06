@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 
 import { api, internal } from "./_generated/api"
 import type { Id } from "./_generated/dataModel"
+import { REGISTRATION_RETRY_MS } from "./students"
 import { CLERK_ID, OTHER_CLERK_ID, setupTest } from "./test.setup"
 
 /**
@@ -192,6 +193,9 @@ describe("updatePrefs", () => {
 
     expect(result.changed).toEqual([])
     expect(await changesFor(t, studentId)).toHaveLength(0)
+    // The unchanged number still has no registration on file, so the re-save
+    // schedules one — drained here rather than left for a later test.
+    await drain(t)
   })
 
   test("the same week described differently is not a change", async () => {
@@ -300,6 +304,7 @@ describe("updatePrefs", () => {
     await expect(
       as.mutation(api.students.updatePrefs, { phone: PHONE, morningHourLocal: 8 })
     ).resolves.toMatchObject({ changed: ["morningHourLocal"] })
+    await drain(t)
   })
 
   test("an unusable timezone is refused before anything is written", async () => {
@@ -576,11 +581,78 @@ describe("registerContact", () => {
       .withIdentity({ subject: CLERK_ID })
       .mutation(api.students.updatePrefs, { phone: PHONE })
 
-    // Cleared the moment the number moves — before the new registration lands,
+    // Replaced the moment the number moves — before the new registration lands,
     // Settings must not claim we can text a number nobody registered.
-    expect((await load(t, studentId))?.photonRegistration).toBeUndefined()
+    expect((await load(t, studentId))?.photonRegistration?.status).toBe("pending")
     await drain(t)
     expect((await load(t, studentId))?.photonRegistration?.status).toBe("registered")
+  })
+
+  test("a second save will not start a second registration while one is in flight", async () => {
+    const t = setupTest()
+    const studentId = await seed(t, {
+      phone: PHONE,
+      photonRegistration: { status: "pending", at: Date.now() },
+    })
+    const as = t.withIdentity({ subject: CLERK_ID })
+
+    // An impatient student pressing "try again": Photon's budget is 5 rps for
+    // the whole project, so one number must not be able to spend it.
+    const result = await as.mutation(api.students.updatePrefs, { phone: PHONE })
+    await drain(t)
+
+    expect(result.changed).toEqual([])
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect((await load(t, studentId))?.photonRegistration?.status).toBe("pending")
+  })
+
+  test("a pending attempt older than the retry window is retried", async () => {
+    const t = setupTest()
+    const studentId = await seed(t, {
+      phone: PHONE,
+      photonRegistration: { status: "pending", at: Date.now() - REGISTRATION_RETRY_MS - 1 },
+    })
+
+    await t
+      .withIdentity({ subject: CLERK_ID })
+      .mutation(api.students.updatePrefs, { phone: PHONE })
+    await drain(t)
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect((await load(t, studentId))?.photonRegistration?.status).toBe("registered")
+  })
+
+  test("a new number never waits behind someone else's in-flight attempt", async () => {
+    const t = setupTest()
+    const studentId = await seed(t, {
+      phone: "+15559990000",
+      photonRegistration: { status: "pending", at: Date.now() },
+    })
+
+    await t
+      .withIdentity({ subject: CLERK_ID })
+      .mutation(api.students.updatePrefs, { phone: PHONE })
+    await drain(t)
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ phone: PHONE })
+    expect((await load(t, studentId))?.photonRegistration?.status).toBe("registered")
+  })
+
+  test("the attempt is marked pending before it is scheduled", async () => {
+    const t = setupTest()
+    const studentId = await seed(t)
+
+    await t
+      .withIdentity({ subject: CLERK_ID })
+      .mutation(api.students.updatePrefs, { phone: PHONE })
+
+    // Written in the same transaction as the schedule, so a concurrent save
+    // sees it and does not start a second attempt.
+    const marked = await load(t, studentId)
+    expect(marked?.photonRegistration?.status).toBe("pending")
+    expect(marked?.photonRegistration?.at).toBeGreaterThan(0)
+    await drain(t)
   })
 
   test("re-saving the same number retries a registration that did not land", async () => {

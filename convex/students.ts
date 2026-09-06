@@ -133,6 +133,13 @@ function assertCalendarDate(field: string, date: string): void {
   }
 }
 
+/**
+ * How long a `pending` registration is believed before a re-save may start
+ * another. Comfortably longer than the route's own deadline (12s) plus Core's
+ * 15s budget, so a genuinely stuck attempt still clears within a minute.
+ */
+export const REGISTRATION_RETRY_MS = 60_000
+
 const MINUTES_IN_DAY = 24 * 60
 
 type TimeBlock = Infer<typeof timeBlockV>
@@ -333,12 +340,33 @@ export const updatePrefs = mutation({
      * Settings' "try again" is a re-save, so this is that retry path — and it
      * writes no change row, because nothing about the student changed.
      */
+    const now = Date.now()
+    const registration = student.photonRegistration
+    /**
+     * One attempt in flight at a time. Without this the retry path is a button
+     * that POSTs on every press: each save schedules another registration, and
+     * Photon's API budget is 5 rps for the whole project — one impatient
+     * student would spend it on their own number. A new number never waits,
+     * since it has no in-flight attempt of its own.
+     */
+    const alreadyTrying =
+      registration?.status === "pending" && now - registration.at < REGISTRATION_RETRY_MS
+
     const registerPhone =
       next.phone !== undefined &&
-      (changed.includes("phone") || student.photonRegistration?.status !== "registered")
+      (changed.includes("phone") ||
+        (registration?.status !== "registered" && !alreadyTrying))
 
     const scheduleRegistration = async () => {
       if (!registerPhone) return
+      // `pending` is written in THIS transaction, before the schedule: it is
+      // what a concurrent save sees, and it replaces whatever the old number's
+      // registration said (that verdict says nothing about this number).
+      // Patched directly rather than carried in the change — bookkeeping about
+      // our transport, deliberately outside `STUDENT_KEYS`.
+      await ctx.db.patch("students", student._id, {
+        photonRegistration: { status: "pending", at: now },
+      })
       // Network call, so an action, so scheduled: the mutation must commit the
       // new number whether or not Photon is reachable. The number goes with it
       // so a late outcome cannot be pinned on a number it was never about.
@@ -365,14 +393,6 @@ export const updatePrefs = mutation({
     })
     await approveChangeInternal(ctx, changeId, "web")
 
-    if (changed.includes("phone")) {
-      // Patched directly rather than carried in the change: `photonRegistration`
-      // is bookkeeping about our transport, not a fact about the student, and
-      // it is deliberately outside `STUDENT_KEYS`. Clearing it is the point —
-      // the old number's registration says nothing about the new one, and
-      // leaving it would tell Settings we can text a number we never registered.
-      await ctx.db.patch("students", student._id, { photonRegistration: undefined })
-    }
     await scheduleRegistration()
 
     return { studentId: student._id, changed }
