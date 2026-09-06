@@ -46,7 +46,7 @@ Primitive → product mapping: approval cards → change feed (two-tier approval
 **Superseded 2026-09-04 by [workspace.md](./workspace.md)**, which owns the design. The short form, so this doc stays coherent on its own:
 
 - The course workspace is a **builder**: the agent (`agent/workspace`, its own eve agent, no planning tools — scope enforced by tool availability) makes **documents, spreadsheets, and slide decks** from the course's materials for `prepared` tasks; each opens as a **tab** in the viewport (the chat tab strip generalizes to an open-items strip) with a real editor, so the student works on what was built. Chats are tabs too, and persisted.
-- Every artifact is **born filed** in the course Library — placed by what it is *for* (the deadline it serves, the material it came from), never named or placed by the student. Filing is the open problem; workspace.md carries the v0 rules and the fallback.
+- Every artifact is **born filed** in the course Library — placed by what it is *for* (the deadline it serves, the material it came from); the student is never asked to name or place anything, and can move anything once and it sticks. Filing is the open problem; workspace.md carries the v0 rules and the fallback.
 - Rail: **Context** / **Tasks** / the **artifact-scoped chat** whenever a non-chat tab is active. A lesson (Heptabase-style parts with progress, chat alongside, notes at the end) is one kind of document, always the fulfilment of a planned task.
 - Canonical content is structured and lives in Convex; `.docx` / `.xlsx` / `.pptx` are exports built in the sandbox.
 - Every workspace exchange writes `studentSignals` (what they asked, edited, stalled on) — the cognitive-signal capture from vision §4b.

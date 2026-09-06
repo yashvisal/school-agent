@@ -17,7 +17,7 @@ What does **not** change:
 - **Scope rule (vision §8).** No planning tools in this agent, ever. "What should I do / when" is a thread question.
 - **Truth rule (vision §10).** Convex holds every artifact; the sandbox filesystem is a materialized view; an agent write is a Convex write with a filesystem side effect.
 - **Isolation.** One sandbox per session (student × course), verified in Spike B.
-- **Every exchange writes signals** (vision §4b). Building alongside the student is the richest cognitive-signal source we will have: what they asked for, what they edited, where they stalled.
+- **Every exchange can write signals, and the fact of the exchange always does** (vision §4b). The agent has `record_signal` and is instructed to use it for anything the student reveals (what they asked for, what they edited, where they stalled); separately, a turn hook records the bare observed fact of each exchange — course, artifact, timestamp — as an `observed` signal with no model call, so nothing depends on the model remembering to call a tool. A signal is a fact about the student, not a log line; the hook writes the one thing that is always true and the agent writes the rest.
 - **No goal-driven tutoring** (vision §12). A lesson is still one kind of document, always the fulfilment of a planned task.
 
 ## The shape — tabs over a Library
@@ -62,15 +62,17 @@ Alternative considered: build real Office files in the sandbox and preview them.
 
 ## Core: artifacts are content, not obligations
 
-New table **`artifacts`** — studentId, courseId, kind, title, `folderPath`, `forTaskId?`, `forDeadlineId?`, `builtFrom?` (material ids), content (inline for small documents/sheets/decks; `storageId` when large), `version`, createdBy (`agent | student`), createdAt, updatedAt, lastOpenedAt. Exports are separate storage rows referenced from the artifact (`exports: [{ format, storageId, version, at }]`) so a stale export is visibly stale.
+New table **`artifacts`** — studentId, courseId, kind, title, `folderPath`, `forTaskId?`, `forDeadlineId?`, `builtFrom?` (material ids), content (inline for small documents/sheets/decks; `storageId` when large), `version`, createdBy (`agent | student`), createdAt, updatedAt, lastOpenedAt, `archivedAt?`. Archive is a student action: it sets `archivedAt`, the Library query excludes archived rows, and nothing is deleted. Exports are separate storage rows referenced from the artifact (`exports: [{ format, storageId, version, at }]`) so a stale export is visibly stale.
+
+**Concurrent edits.** The student and the agent can edit the same artifact. Every write carries the `version` it was based on: `update_artifact(id, patch, expectedVersion)` and the editor's saves alike. A write whose `expectedVersion` is behind the row's `version` is refused with a conflict (409) and nothing is applied; the agent re-reads the artifact and re-applies its patch against the current content, and the editor rebases the same way. The student's edit is never overwritten by a stale agent patch. For `document`, Convex's `prosemirror-sync` component is the first thing to evaluate, since it gives agent-and-student edits to one document a real merge instead of a retry loop; `sheet` and `deck` patches are cell- and slide-scoped, so version-checked patches are enough.
 
 **Artifacts are written directly, like `materials`, not through `changes`.** core.md already carves this out for raw captures: they are content, not facts about the student's obligations; nothing to approve, nothing the planner reads. The same holds for a deck. The `changes` rule covers student *state*.
 
-**One thing an artifact does change:** a `prepared` task's status. When an artifact linked to `forTaskId` is saved, Core emits a `task_updated` change (new origin `workspace`, tier `auto` — it is an observation that the work exists, not an interpretation of anything the student said) so the plan, the Dashboard, and the morning text all see "the deck is ready" without the workspace agent holding a planning tool. Core owns that rule; the agent only saves.
+**One thing an artifact does change:** a `prepared` task's status. When an artifact linked to `forTaskId` is saved, Core emits a `task_updated` change (new origin `workspace`, tier `auto`, listed in core.md's origin enum as decided-but-not-built until this lands — it is an observation that the work exists, not an interpretation of anything the student said) so the plan, the Dashboard, and the morning text all see "the deck is ready" without the workspace agent holding a planning tool. Core owns that rule; the agent only saves.
 
 **Chats become durable in the same slice:** a `chats` table (studentId, courseId, title, eveSessionId, streamCursor, createdAt, lastMessageAt, `producedArtifactIds`) so a chat entry reopens where it was left (`initialSession` + `resume`, per face.md Spike B). The fixture-backed `useCourseChats` hook is replaced by a subscription; nothing in the UI moves.
 
-**Library = one query over three tables**, per course: `materials` (Canvas captures), uploads (`sources` with storage), `artifacts` — each carrying a `folderPath`. Existing `materials` rows get a default folder ("From Canvas", mirroring the Canvas module name when present); uploads and texted-in files go to "Yours".
+**Library = one query over three tables**, per course: `materials` (Canvas captures), uploads (`sources` with storage), `artifacts` — each carrying a `folderPath`. That field is added to `materials` and to upload `sources` configs in core.md's state model (not a separate filing relation — one string per item is enough and switching filing strategies stays cheap). Backfill for existing rows: `materials` → "From Canvas" (or the Canvas module name when present); uploads and texted-in files → "Yours".
 
 Versions: `version` counter and the previous `storageId` kept on the row. Full history is deferred until a student asks for it.
 
@@ -98,7 +100,7 @@ Today `agent/workspace/tools/` holds three Spike B probes (`write_marker`, `list
 | *(hydrate, in `onSession`)*            | `state.md`, `signals.md`, materials manifest, artifacts manifest into `/workspace`                            | no             |
 | `read_material(id)`                    | fetch one material's bytes / markdown on demand (manifest + fetch-on-demand, face.md)                        | no             |
 | `create_artifact(kind, title, for?, content)` | the write path; Core save is the event, the `/workspace` file is the side effect                     | `artifacts`    |
-| `update_artifact(id, patch)`           | a structured patch (replace slide 3's body, set B4); streams into the open tab                               | `artifacts`    |
+| `update_artifact(id, patch, expectedVersion)` | a structured patch (replace slide 3's body, set B4); refused with a conflict if `expectedVersion` is stale (see "Concurrent edits"); streams into the open tab | `artifacts`    |
 | `export_artifact(id, format)`          | build `.docx` / `.xlsx` / `.pptx` / `.pdf` in the sandbox → Convex storage → download link                   | `artifacts.exports` |
 | `propose_change`                       | fact fixes when a material contradicts `state.md` (exists; must call Core's `changes.propose`)              | `changes`      |
 | `record_signal`                        | cognitive signals: what they asked, where they stalled, what they edited (vision §4b)                        | `studentSignals` |
