@@ -397,7 +397,10 @@ function BatchCard({
           transitionDuration: `${expandMs}ms`,
         }}
       >
-        <div className="min-h-0 overflow-hidden">
+        {/* Collapsed is not just visually hidden: `overflow-hidden` on a 0fr
+          * row still leaves the Fix and Approve buttons in the tab order, so a
+          * keyboard user tabs into controls nobody can see. */}
+        <div className="min-h-0 overflow-hidden" inert={!open}>
           <div className="flex flex-col gap-2 p-2.5">
             {changes.map((change) => (
               <PendingRow

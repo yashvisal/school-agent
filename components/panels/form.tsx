@@ -37,7 +37,15 @@ export function Divider() {
   return <div className="h-px bg-line" />
 }
 
-/** Label on the left, a control on the right — the shape of every settings row. */
+/**
+ * Label on the left, a control on the right — the shape of every settings row.
+ *
+ * Two shapes, chosen by whether the row holds one focusable control:
+ * with `htmlFor` it is a real `<label>` and the browser does the association;
+ * without one (a tablist, a strip of day toggles) a `<label>` would name
+ * nothing, so the row becomes a `role="group"` labelled by the same text and
+ * every control inside inherits "Check-ins" or "Free days" as its group name.
+ */
 export function FieldRow({
   label,
   hint,
@@ -49,13 +57,32 @@ export function FieldRow({
   htmlFor?: string
   children: React.ReactNode
 }) {
+  const labelId = React.useId()
+  const rowClass = "flex min-h-11 items-center justify-between gap-4 py-2"
+  const text = (
+    <>
+      <span id={labelId} className="text-sm text-ink-2">
+        {label}
+      </span>
+      {hint && <span className="text-[12px] text-ink-3">{hint}</span>}
+    </>
+  )
+  const control = <span className="flex shrink-0 items-center gap-2">{children}</span>
+
+  if (htmlFor) {
+    return (
+      <div className={rowClass}>
+        <label htmlFor={htmlFor} className="flex min-w-0 flex-col">
+          {text}
+        </label>
+        {control}
+      </div>
+    )
+  }
   return (
-    <div className="flex min-h-11 items-center justify-between gap-4 py-2">
-      <label htmlFor={htmlFor} className="flex min-w-0 flex-col">
-        <span className="text-sm text-ink-2">{label}</span>
-        {hint && <span className="text-[12px] text-ink-3">{hint}</span>}
-      </label>
-      <span className="flex shrink-0 items-center gap-2">{children}</span>
+    <div role="group" aria-labelledby={labelId} className={rowClass}>
+      <span className="flex min-w-0 flex-col">{text}</span>
+      {control}
     </div>
   )
 }
@@ -104,7 +131,13 @@ export function SaveBar({
 }) {
   return (
     <div className="flex min-h-11 items-center gap-3 py-2">
-      <span className="min-w-0 flex-1 text-[12.5px] leading-relaxed text-ink-2">
+      {/* The result of a save is the whole feedback: a student who tabbed to
+        * the button and pressed it never sees this line otherwise. */}
+      <span
+        role="status"
+        aria-live="polite"
+        className="min-w-0 flex-1 text-[12.5px] leading-relaxed text-ink-2"
+      >
         {error ? <span className="text-red">{error}</span> : note}
       </span>
       <Button
