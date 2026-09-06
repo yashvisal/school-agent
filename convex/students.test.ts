@@ -290,6 +290,81 @@ describe("updatePrefs", () => {
     ).rejects.toThrow("400")
   })
 
+  /**
+   * The planner subtracts these blocks from the day, so a block its arithmetic
+   * cannot read is not cosmetic: a negative window, a day number that matches
+   * nothing, or a fractional minute all poison the feasible set silently.
+   */
+  describe("availability blocks are checked before they are stored", () => {
+    const block = (overrides: Record<string, number>) => ({
+      dayOfWeek: 1,
+      startMin: 9 * 60,
+      endMin: 17 * 60,
+      ...overrides,
+    })
+
+    const bad: [string, unknown][] = [
+      ["a day outside the week", { weekly: [block({ dayOfWeek: 7 })], exceptions: [] }],
+      ["a fractional day", { weekly: [block({ dayOfWeek: 1.5 })], exceptions: [] }],
+      ["a negative start", { weekly: [block({ startMin: -30 })], exceptions: [] }],
+      ["an end past midnight", { weekly: [block({ endMin: 1441 })], exceptions: [] }],
+      ["a fractional minute", { weekly: [block({ startMin: 90.5 })], exceptions: [] }],
+      [
+        "a block that ends before it starts",
+        { weekly: [block({ startMin: 17 * 60, endMin: 9 * 60 })], exceptions: [] },
+      ],
+      [
+        "a zero-length block",
+        { weekly: [block({ startMin: 600, endMin: 600 })], exceptions: [] },
+      ],
+      [
+        "an exception on a day that does not exist",
+        { weekly: [], exceptions: [{ date: "2026-02-30", blocks: [] }] },
+      ],
+      [
+        "an exception carrying a bad block",
+        { weekly: [], exceptions: [{ date: "2026-09-15", blocks: [block({ endMin: 0 })] }] },
+      ],
+    ]
+
+    for (const [what, availability] of bad) {
+      test(what, async () => {
+        const t = setupTest()
+        const studentId = await seed(t)
+        await expect(
+          t.withIdentity({ subject: CLERK_ID }).mutation(api.students.updatePrefs, {
+            availability: availability as typeof WEEKDAYS,
+          })
+        ).rejects.toThrow("400")
+        expect((await load(t, studentId))?.availability.weekly).toHaveLength(0)
+        expect(await changesFor(t, studentId)).toHaveLength(0)
+      })
+    }
+
+    test("a block that runs to midnight is fine", async () => {
+      const t = setupTest()
+      await seed(t)
+      await expect(
+        t.withIdentity({ subject: CLERK_ID }).mutation(api.students.updatePrefs, {
+          availability: {
+            weekly: [block({ dayOfWeek: 0, startMin: 0, endMin: 1440 })],
+            exceptions: [{ date: "2026-09-15", blocks: [] }],
+          },
+        })
+      ).resolves.toMatchObject({ changed: ["availability"] })
+    })
+
+    test("the message names the block that is wrong", async () => {
+      const t = setupTest()
+      await seed(t)
+      await expect(
+        t.withIdentity({ subject: CLERK_ID }).mutation(api.students.updatePrefs, {
+          availability: { weekly: [block({}), block({ dayOfWeek: 9 })], exceptions: [] },
+        })
+      ).rejects.toThrow("availability.weekly[1].dayOfWeek")
+    })
+  })
+
   test("a stranger's settings are unreachable — identity picks the row", async () => {
     const t = setupTest()
     const mine = await seed(t)

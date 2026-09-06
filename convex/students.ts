@@ -1,3 +1,4 @@
+import type { Infer } from "convex/values"
 import { v } from "convex/values"
 
 import { internal } from "./_generated/api"
@@ -16,6 +17,7 @@ import {
   checkInPreferenceV,
   photonRegistrationV,
   studentDocV,
+  timeBlockV,
 } from "./lib/validators"
 
 const DEFAULT_TIMEZONE = "America/New_York"
@@ -120,6 +122,46 @@ function assertCalendarDate(field: string, date: string): void {
   }
 }
 
+const MINUTES_IN_DAY = 24 * 60
+
+type TimeBlock = Infer<typeof timeBlockV>
+
+/**
+ * The planner subtracts these blocks from the day and offers what is left, so a
+ * block the arithmetic cannot read is not a cosmetic problem: `endMin` before
+ * `startMin` yields a negative window, a `dayOfWeek` of 9 silently never
+ * matches, and a fractional minute makes every window boundary fractional. The
+ * validator can only prove these are numbers, so the ranges are checked here.
+ */
+function assertTimeBlocks(where: string, blocks: readonly TimeBlock[]): void {
+  blocks.forEach((block, index) => {
+    const at = `${where}[${index}]`
+    if (!Number.isInteger(block.dayOfWeek) || block.dayOfWeek < 0 || block.dayOfWeek > 6) {
+      throw new Error(`400: ${at}.dayOfWeek must be a whole day 0-6 (0 = Sunday)`)
+    }
+    for (const field of ["startMin", "endMin"] as const) {
+      const value = block[field]
+      if (!Number.isInteger(value) || value < 0 || value > MINUTES_IN_DAY) {
+        throw new Error(
+          `400: ${at}.${field} must be a whole minute from midnight, 0-${MINUTES_IN_DAY}`
+        )
+      }
+    }
+    if (block.startMin >= block.endMin) {
+      throw new Error(`400: ${at} starts at or after it ends`)
+    }
+  })
+}
+
+function assertAvailability(availability: Infer<typeof availabilityV>): void {
+  assertTimeBlocks("availability.weekly", availability.weekly)
+  availability.exceptions.forEach((exception, index) => {
+    const at = `availability.exceptions[${index}]`
+    assertCalendarDate(`${at}.date`, exception.date)
+    assertTimeBlocks(`${at}.blocks`, exception.blocks)
+  })
+}
+
 /**
  * Structural equality for the values this mutation compares. Availability is a
  * nested object, and a Settings form that re-submits an unchanged grid must not
@@ -210,7 +252,10 @@ export const updatePrefs = mutation({
       next.morningHourLocal = args.morningHourLocal
     }
 
-    if (args.availability !== undefined) next.availability = args.availability
+    if (args.availability !== undefined) {
+      assertAvailability(args.availability)
+      next.availability = args.availability
+    }
     if (args.checkInPreference !== undefined) {
       next.checkInPreference = args.checkInPreference
     }
