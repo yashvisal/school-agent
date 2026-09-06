@@ -1,10 +1,11 @@
 import { v } from "convex/values"
 
-import type { Doc } from "../_generated/dataModel"
+import type { Doc, Id } from "../_generated/dataModel"
 import { internalMutation, internalQuery, mutation, query } from "../_generated/server"
 import { getCurrentStudent, requireStudent } from "../lib/auth"
 import { requireFetchableUrl } from "../lib/net"
 import { sourceConfigKindV, sourceHealthV } from "../lib/validators"
+import { isPollableKind, isUploadKind, schedulePoll, scheduleReextract } from "./dispatch"
 
 /**
  * Source registration and health (core.md "State model": `sources` — studentId,
@@ -215,6 +216,63 @@ export const setEnabled = mutation({
     return null
   },
 })
+
+/**
+ * "Re-sync now" from the Face connectors view.
+ *
+ * Feeds (canvas, ical, site) run exactly the poll the cron would have run for
+ * this one source; uploads (syllabus, schedule) re-run their extraction from
+ * the `storageId` the upload already stored on the config. Both are scheduled,
+ * not awaited: a poll is a network call plus a model call, and the tap that
+ * asked for it should return immediately.
+ *
+ * Health is set to `unknown` synchronously so the card can show "syncing…" the
+ * moment the mutation lands; the poll or extraction writes the real health when
+ * it finishes, exactly as it does on the cron path.
+ */
+export const resync = mutation({
+  args: { sourceId: v.id("sources") },
+  returns: v.object({ scheduled: v.boolean() }),
+  handler: async (ctx, args) => {
+    const source = await ctx.db.get("sources", args.sourceId)
+    if (!source) throw new Error("404: source not found")
+    // Ownership on the row, not just "is someone signed in": `sourceId` is a
+    // caller-supplied opaque string, and re-syncing someone else's Canvas token
+    // is both a write on their account and a probe of ours.
+    await requireStudent(ctx, source.studentId)
+
+    // A disabled source is disabled on every path. Re-syncing one would poll a
+    // feed the student explicitly switched off and write changes from it.
+    if (!source.enabled) throw new Error("400: source is disabled; enable it first")
+
+    if (isPollableKind(source.kind)) {
+      await schedulePoll(ctx.scheduler, source.kind, args.sourceId)
+    } else if (isUploadKind(source.kind)) {
+      const storageId = storageIdOf(source.config)
+      if (!storageId) {
+        throw new Error("400: this upload has no stored document to re-extract")
+      }
+      await scheduleReextract(ctx.scheduler, source.kind, args.sourceId, storageId)
+    } else {
+      // `calendar` is registered by the schema but has no adapter yet (core.md
+      // "Adapters" #6, Milestone 2). Refusing beats silently doing nothing.
+      throw new Error(`400: re-sync is not supported for ${source.kind} sources yet`)
+    }
+
+    await ctx.db.patch("sources", args.sourceId, {
+      health: { status: "unknown", message: "re-sync requested", at: Date.now() },
+    })
+    return { scheduled: true }
+  },
+})
+
+const storageIdOf = (config: unknown): Id<"_storage"> | undefined => {
+  const value =
+    config && typeof config === "object" && !Array.isArray(config)
+      ? (config as Record<string, unknown>).storageId
+      : undefined
+  return typeof value === "string" ? (value as Id<"_storage">) : undefined
+}
 
 // ---------------------------------------------------------------------------
 // internal
