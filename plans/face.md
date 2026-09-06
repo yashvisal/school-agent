@@ -41,16 +41,21 @@ Primitive → product mapping: approval cards → change feed (two-tier approval
 
 `hydrateWorkspace(studentId, courseId)` assembles the agent's filesystem from Convex per session: course materials (or a manifest + fetch-on-demand), `state.md` (deadlines / grading / plan rendered as markdown), `signals.md` (studentSignals digest), recent conversation summaries, prior artifacts. Three rules: (1) **always rebuildable** — delete + re-hydrate is lossless; (2) **agent writes never stay local** — the Convex write is the event, the filesystem write is a side effect; (3) **staleness is explicit** — hydration is timestamped; mid-session `changes` re-hydrate or are surfaced to the agent. What we choose to hydrate is context engineering, and it is where the quality lives.
 
-## Milestone 3 — workspaces come alive
+## Milestone 3 — the workspace as a builder
 
-- **Course workspace** — the harness proper, driven by the **workspace agent** (`agent/workspace`, its own eve agent definition, separate from Voice; no planning tools — scope enforced by tool availability; hydrate + artifact + `recordSignal` tools only). Viewport: an artifact the agent prepared — primer, review outline, or a **lesson** — or a file it was built from. Lesson form borrows from [Heptabase AI Tutor](https://heptabase.com/ai-tutor#explore-learning): parts with a progress tracker, prose in the viewport, chat alongside, "create notes" → Library at the end. Difference: a lesson is always the fulfillment of a *planned task* ("review ch. 7 before Thursday's quiz"), built from the student's own materials — never "what do you want to learn?". Rail: **Context** (sources with provenance), **Tasks** (this course's plan), **Chat** (artifact-scoped). A **workspace agent** orchestrates the course: builds artifacts for `prepared` tasks, keeps them current as materials change, answers within the course's library and notes. Artifact-scoped chat sits beneath it and talks about the thing in the viewport. The rail chat is a bot *with access to* everything in the library/notes — not a list of notes.
-- **Library** — its own tab, Drive-like: agent artifacts + everything the student brings in (PDFs, notes, Notion/Docs imports), foldered by course, searchable. This is how class-related information gets in beyond connectors.
-- Every workspace/artifact exchange writes `studentSignals` (difficulty, confusion, what they asked about, which lesson part they stalled on) — the cognitive-signal capture from vision §4b.
+**Superseded 2026-09-04 by [workspace.md](./workspace.md)**, which owns the design. The short form, so this doc stays coherent on its own:
+
+- The course workspace is a **builder**: the agent (`agent/workspace`, its own eve agent, no planning tools — scope enforced by tool availability) makes **documents, spreadsheets, and slide decks** from the course's materials for `prepared` tasks; each opens as a **tab** in the viewport (the chat tab strip generalizes to an open-items strip) with a real editor, so the student works on what was built. Chats are tabs too, and persisted.
+- Every artifact is **born filed** in the course Library — placed by what it is *for* (the deadline it serves, the material it came from), never named or placed by the student. Filing is the open problem; workspace.md carries the v0 rules and the fallback.
+- Rail: **Context** / **Tasks** / the **artifact-scoped chat** whenever a non-chat tab is active. A lesson (Heptabase-style parts with progress, chat alongside, notes at the end) is one kind of document, always the fulfilment of a planned task.
+- Canonical content is structured and lives in Convex; `.docx` / `.xlsx` / `.pptx` are exports built in the sandbox.
+- Every workspace exchange writes `studentSignals` (what they asked, edited, stalled on) — the cognitive-signal capture from vision §4b.
+- Paper first: Library with folders, document / deck / sheet tabs, and the "agent building in a tab" state.
 
 ## Later
 
-- Editor for student-authored notes in the workspace — only if M3 usage shows students want to write here, not just read and ask.
 - Notion/Docs imports; personal calendar connector UI (M2).
+- Version history, templates, sharing — only if the builder's first pilot asks for them (workspace.md "Not building").
 
 ## Design flow
 

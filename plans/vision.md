@@ -164,7 +164,7 @@ Built on a forked agent-UI harness (Beautiful UI, MIT, Next.js + Tailwind v4 —
 
 - **Dashboard (home)** — what's happening, what's upcoming, the **change feed** (new from Canvas, decided in chat — approve/fix in one tap), recent artifacts, quick links. Prioritized by up-to-date chat context: if we just talked about the chem pset, the chem pset leads. Relevance ordering, not a fixed widget grid.
 - **Semester** — calendar-shaped, filterable by course, zoomable (week / month / semester). Deadlines and planned tasks with **diffs highlighted** (moved, added, pending approval). Click into anything to see facts + provenance and **fix** it. Not a scheduler — never drag-to-plan.
-- **Course workspaces (course mode)** — the harness proper. **Overview**: grading scheme as stated, upcoming, what's planned. **Library**: this course's files (uploads, Canvas captures) and, from M3, artifacts — a primer, a review outline, or a **lesson** (Heptabase-style: parts with progress, prose in the viewport, chat alongside, notes into the Library at the end — but scoped to a planned task and built from the student's materials); later an editor for the student's own notes. **Chats**: per-course, plural, persisted eve sessions; each opens in the viewport with Context/Tasks in the rail. Lessons are also the richest **cognitive-signal** source we'll have (§4b): "stuck on part 3" is exactly the data the expert-in-the-student layer needs. Rail: Context / Tasks / artifact-scoped Chat — a bot with access to everything in this course's library and notes, *not* a list of notes. Exists for one reason: the agent prepared something for a planned task and this is where the student uses it. Generic-workspace features (editors, student-authored notes) come later, only if usage shows students want to write here rather than read and ask.
+- **Course workspaces (course mode)** — the harness proper, and from M3 a **builder** (decided 2026-09-04; the full design is [workspace.md](./workspace.md)). **Overview**: grading scheme as stated, upcoming, what's planned. **Library**: everything in this course — Canvas captures, uploads, and what the agent built — filed in a few derived folders, never named or placed by the student. **Tabs**: any Library item opens as a tab in the viewport — a chat, a **document**, a **spreadsheet**, a **slide deck**, or a file — with real editors, so the student can work on what the agent built. **Chats**: per-course, plural, persisted eve sessions. Rail: Context / Tasks / artifact-scoped Chat — the agent talking about the thing in the viewport ("shorten slide 3"), with access to everything in this course's Library. A **lesson** (Heptabase-style parts with progress, chat alongside, notes at the end) is one kind of document, always the fulfilment of a planned task and built from the student's materials. Building alongside the student is the richest **cognitive-signal** source we'll have (§4b). The workspace exists for one reason: the plan said the student would need something, the agent made it, and this is where they use it.
 - **Library** — per course (course mode), Drive-like: everything the agent prepared and everything the student brought in (PDFs, notes, imports from Notion/Docs). No global Library tab. How class-related information gets into the system beyond connectors.
 - **Connectors** — Canvas token, iCal, personal calendar, email-in address, later more. Set-and-forget with health status.
 - **Settings** — availability, phone, voice preferences ("fewer check-ins"), account.
@@ -235,10 +235,10 @@ Three workstreams over a shared core, developed **in parallel** — parallelism 
 Milestones cut across workstreams:
 1. **It talks** — facts ingested from spec-derived fixtures (real Canvas later), onboarding + Dashboard/Semester, first morning text. Demo the product, not a dashboard.
 2. **It holds** — replan on miss, check-ins, observe-and-remember (behavioral expertise, §4b), personal calendar connector, mid-semester onboarding, live tokens from friends.
-3. **It prepares** — materials access (§7), Library, course workspaces + workspace agent, `prepared` tasks.
+3. **It prepares** — materials access (§7), Library, the course workspace as a builder (documents, sheets, decks, chats in tabs; filed in the Library — [workspace.md](./workspace.md)), `prepared` tasks.
 4. **It learns** — statistical pacing/compliance over signals, cognitive signals consumed, more connectors (Notion/Docs), browser extension if warranted.
 
-Plan docs: `plans/core.md`, `plans/voice.md`, `plans/face.md`.
+Plan docs: `plans/core.md`, `plans/voice.md`, `plans/face.md`, `plans/workspace.md` (M3, the builder). Sequencing and status: `plans/roadmap.md`.
 
 ---
 
@@ -256,7 +256,7 @@ In parallel, and independent of the Face: **Core** starts on day one against spe
 - Real email integration (OAuth/SSO into school Microsoft 365 or Gmail).
 - Browser extension (candidate for a later milestone).
 - Plan negotiation on the web — web chat is workspace/artifact-scoped only (§8 scope rule).
-- Generic-workspace features (text editor, student-authored notes) before Milestone 3 usage shows students want to write, not just read and ask.
+- A generic productivity suite. The workspace's editors (workspace.md) exist so the student can work on what the agent built for a course; features with no tie to a course, a material, or a task — arbitrary file management, sharing, real-time collaboration — are out. (Revised 2026-09-04: this bullet used to defer editors entirely; the workspace is now a builder from M3.)
 - **Open-ended, goal-driven tutoring** ("teach me X"). We only teach what the plan says you need, from your materials — lessons are a prepared artifact inside the loop, not a product. No mastery modeling yet; capture the signals now (§4b).
 
 ## 13. Open questions
