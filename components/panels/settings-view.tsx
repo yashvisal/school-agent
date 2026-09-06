@@ -226,21 +226,22 @@ function ThreadSection({ viewer }: { viewer: Viewer | undefined }) {
 
   /* Retry is a re-save of the SAME number: `updatePrefs` re-schedules
    * `registerContact` whenever a phone is submitted and the registration is
-   * not already `registered`, writing no change row for it. The outcome
-   * arrives as a NEW `photonRegistration.at`, so remembering the old one is
-   * what tells us the retry is still in flight — no timer. */
-  const [retryFrom, setRetryFrom] = React.useState<number | null>(null)
-  const retrying = retryFrom !== null && (registration?.at ?? 0) === retryFrom
+   * not already `registered`. Core writes `pending` in that same transaction,
+   * so the subscription carries the "in flight" state on its own — the local
+   * flag only covers the gap between the click and the mutation resolving,
+   * where the row still says `failed`.
+   *
+   * A retry pressed inside Core's 60s one-attempt-at-a-time window schedules
+   * nothing and returns normally, leaving the status at `pending` — which
+   * reads as "Registering…" and is exactly right. There is nothing to tell the
+   * student, and nothing here has to know a throttle exists. */
+  const [retrying, setRetrying] = React.useState(false)
 
   const onRetry = async () => {
     if (!viewer?.phone) return
-    setRetryFrom(registration?.at ?? 0)
-    const ok = await save({ phone: viewer.phone }, () => "Sent to the texting line again.")
-    // A rejected retry never scheduled anything, so leaving the note at
-    // "Registering…" alongside the save error would contradict itself. Cleared
-    // here rather than in an effect on `error`: setting state from an effect is
-    // exactly the re-render loop the lint rule exists to stop.
-    if (!ok) setRetryFrom(null)
+    setRetrying(true)
+    await save({ phone: viewer.phone }, () => "Sent to the texting line again.")
+    setRetrying(false)
   }
 
   return (
@@ -317,10 +318,11 @@ function ThreadSection({ viewer }: { viewer: Viewer | undefined }) {
 /**
  * A shared texting line can only message a number Photon knows, so saving a
  * phone schedules its registration and the outcome lands back on the student
- * row a moment later (lib/data/README.md "photonRegistration"). Changing the
- * number CLEARS the old outcome, so an absent value right after a save means
- * "in flight", not "never tried" — which is why the phone has to be on file
- * for this to render at all.
+ * row a moment later (lib/data/README.md "photonRegistration"). Core writes
+ * `pending` in the transaction that schedules the attempt, so the state table
+ * is: absent (nothing saved yet) and `pending` both read "Registering…";
+ * `registered` and `failed` are the two verdicts; `skipped` is a deployment
+ * with no Voice, which is not a failure and not the student's problem.
  */
 function RegistrationNote({
   registration,
@@ -343,7 +345,7 @@ function RegistrationNote({
       </p>
     )
   }
-  if (!registration || retrying) {
+  if (!registration || registration.status === "pending" || retrying) {
     return (
       <p className="pb-2.5 text-[12.5px] leading-relaxed text-ink-3">
         Registering…
