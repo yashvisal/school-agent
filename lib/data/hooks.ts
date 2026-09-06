@@ -280,6 +280,9 @@ function mapChange(doc: Doc<"changes">): Change {
     confidence,
     snapshotIds: doc.snapshotIds,
     batchId: doc.batchId,
+    applyError: doc.applyError
+      ? { message: doc.applyError.message, at: msToIso(doc.applyError.at) }
+      : undefined,
     at: msToIso(doc.createdAt),
   }
 }

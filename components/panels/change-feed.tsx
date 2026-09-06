@@ -272,6 +272,15 @@ function PendingRow({
         {change.fields.map((f) => (
           <DiffLine key={f.field} field={f.field} before={f.before} after={f.after} />
         ))}
+        {/* Not a status — the row is still pending and Approve still works.
+          * It says why the bulk approve passed this one over, so the student
+          * can fix the cause (a deleted course, usually) and approve it alone.
+          * A successful approve clears the field server-side. */}
+        {change.applyError && (
+          <p className="rounded-[4px] bg-red-tint px-1.5 py-1 text-[12px] leading-relaxed text-red">
+            couldn&apos;t apply: {change.applyError.message}
+          </p>
+        )}
       </div>
 
       {fixing && fixable && (
@@ -363,6 +372,8 @@ function BatchCard({
   )
   const [error, setError] = React.useState<string | null>(null)
 
+  const failedCount = changes.filter((c) => c.applyError).length
+
   const onApproveAll = async () => {
     setStatus("approving")
     setError(null)
@@ -419,6 +430,15 @@ function BatchCard({
 
       <div className="primitive-card-footer flex min-h-11 items-center gap-2 border-t border-line">
         <ToolChip>{changes[0].toolLabel}</ToolChip>
+        {/* One bad row never costs the student the rest of the parse: the
+          * others applied, these stayed pending with a reason on them. Counted
+          * on the closed card so "Approve all" leaving rows behind is visible
+          * without opening it. */}
+        {failedCount > 0 && (
+          <span className="text-[11.5px] text-red">
+            {failedCount} couldn&apos;t apply
+          </span>
+        )}
         {error && <span className="text-[11.5px] text-red">{error}</span>}
         <span className="ml-auto flex items-center gap-1.5">
           <Button

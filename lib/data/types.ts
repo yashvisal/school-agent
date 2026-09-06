@@ -215,6 +215,14 @@ export type Change = {
    * single-source diffs.
    */
   batchId?: string
+  /**
+   * Why a bulk approve tried this row and could not apply it — a deadline
+   * whose course was deleted, say. **Not a status**: the row is still
+   * `pending`, so its card stays and says why instead of vanishing, and
+   * approving it on its own once the cause is fixed clears the field
+   * server-side.
+   */
+  applyError?: { message: string; at: string }
   /** ISO 8601 */
   at: string
 }
