@@ -1174,6 +1174,45 @@ describe("changes.proposeManual — the Fix button", () => {
     )
   })
 
+  test("a malformed id, or one from another table, is a 404", async () => {
+    const t = setupTest()
+    const { courseId, deadlineId } = await seedDeadline(t)
+    const as = t.withIdentity({ subject: CLERK_ID })
+
+    // Not an id at all. Nothing downstream should ever see this string.
+    await expect(
+      as.mutation(api.changes.proposeManual, {
+        kind: "deadline_updated",
+        entity: { table: "deadlines", id: "not-an-id" },
+        after: { title: "nope" },
+      })
+    ).rejects.toThrow(/404/)
+
+    // Well-formed, the caller's own, and from the WRONG table: `entity.id` is a
+    // bare string, so this is the shape that would otherwise be handed to
+    // `db.get("deadlines", <course id>)`.
+    await expect(
+      as.mutation(api.changes.proposeManual, {
+        kind: "deadline_updated",
+        entity: { table: "deadlines", id: courseId },
+        after: { title: "nope" },
+      })
+    ).rejects.toThrow(/404/)
+
+    expect((await t.run((ctx) => ctx.db.get("deadlines", deadlineId)))?.title).toBe(
+      "Pset 3"
+    )
+    expect((await t.run((ctx) => ctx.db.get("courses", courseId)))?.name).toBe(
+      "Compsci 201"
+    )
+    // A refused id writes no change row either — the feed stays clean.
+    expect(
+      (await t.run((ctx) => ctx.db.query("changes").take(50))).filter(
+        (c) => c.origin === "manual"
+      )
+    ).toHaveLength(0)
+  })
+
   test("fixing a pending card supersedes it: rejected, and the fix applies", async () => {
     const t = setupTest()
     const { studentId, courseId, deadlineId } = await seedDeadline(t)

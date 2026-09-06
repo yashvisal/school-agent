@@ -126,7 +126,13 @@ export const proposeManual = mutation({
     }
 
     const table = args.entity.table
-    const entityId = args.entity.id as Id<OwnedTable>
+    // `entity.id` is a bare string (the entity is a table + id pair, not a typed
+    // `v.id`), so it has to be checked against the table it claims to be in
+    // before it is used as one. `normalizeId` returns null for a malformed id
+    // AND for a well-formed id belonging to a different table — a course id
+    // passed as a deadline id is not a deadline that has gone missing.
+    const entityId = ctx.db.normalizeId(table, args.entity.id) as Id<OwnedTable> | null
+    if (!entityId) throw new Error("404: entity not found")
     // Ownership at the front door as well as in `applyChange`: a 404/403 here is
     // an answer the UI can show, where a silently no-op'd apply is a Fix button
     // that appears to work and changes nothing.
