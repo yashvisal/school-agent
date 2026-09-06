@@ -97,5 +97,5 @@ Production is live: the Next app and both eve agents on Vercel (`school-agent-ya
 ## Plan-doc reconciliation (fold into the PRs above)
 
 - core.md definition-of-done boxes: tick what shipped; the only honest unticked items are live validation and the mid-semester path's live run.
-- `lib/data/README.md`: `updatePrefs`, `resync`, `proposeManual` and `batchId` all landed and are wired in Face. One correction it still needs: it says re-saving the same phone retries the Photon registration, and `updatePrefs` returns early when nothing moved, so it does not — Settings tells the student to change the number instead. A `students.retryRegistration` (or scheduling `registerContact` on an unchanged phone) is the honest fix, and is the only Core ask left from Slice 1 item 5.
+- `lib/data/README.md`: `updatePrefs`, `resync`, `proposeManual` and `batchId` all landed and are wired in Face, including the re-save retry for a failed Photon registration and `approveMany`'s `continued` continuation. Nothing from Slice 1 item 5 is waiting on Core.
 - face.md Milestone 3 and vision §8/§12 now point at workspace.md.

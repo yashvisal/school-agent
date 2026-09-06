@@ -4,6 +4,7 @@ import * as React from "react"
 import { useUser } from "@clerk/nextjs"
 import { useMutation } from "convex/react"
 
+import { Button } from "@/components/harness/atoms/Button"
 import { SegmentedControl } from "@/components/harness/atoms/SegmentedControl"
 import { StatusPill } from "@/components/harness/atoms/StatusPill"
 import { TextRow } from "@/components/harness/atoms/TextRow"
@@ -219,11 +220,21 @@ function ThreadSection({ viewer }: { viewer: Viewer | undefined }) {
     })
   }
 
-  /* Re-saving the SAME number is a no-op in Core (`updatePrefs` returns early
-   * when nothing moved, so nothing re-schedules `registerContact`). The retry
-   * therefore has to be an actual edit — say so instead of offering a button
-   * that quietly does nothing. Noted for Core in the PR. */
   const registration = viewer?.photonRegistration
+
+  /* Retry is a re-save of the SAME number: `updatePrefs` re-schedules
+   * `registerContact` whenever a phone is submitted and the registration is
+   * not already `registered`, writing no change row for it. The outcome
+   * arrives as a NEW `photonRegistration.at`, so remembering the old one is
+   * what tells us the retry is still in flight — no timer. */
+  const [retryFrom, setRetryFrom] = React.useState<number | null>(null)
+  const retrying = retryFrom !== null && (registration?.at ?? 0) === retryFrom
+
+  const onRetry = () => {
+    if (!viewer?.phone) return
+    setRetryFrom(registration?.at ?? 0)
+    void save({ phone: viewer.phone }, () => "Sent to the texting line again.")
+  }
 
   return (
     <section className="flex flex-col gap-3">
@@ -250,6 +261,8 @@ function ThreadSection({ viewer }: { viewer: Viewer | undefined }) {
           registration={registration}
           hasPhone={Boolean(viewer?.phone)}
           pendingEdit={phoneMoved}
+          retrying={retrying}
+          onRetry={onRetry}
         />
         <Divider />
         <FieldRow label="Check-ins" hint="how often Voice reaches out beyond the morning">
@@ -297,17 +310,23 @@ function ThreadSection({ viewer }: { viewer: Viewer | undefined }) {
 /**
  * A shared texting line can only message a number Photon knows, so saving a
  * phone schedules its registration and the outcome lands back on the student
- * row a moment later (lib/data/README.md "photonRegistration"). `skipped` means
- * this deployment has no Voice attached — say nothing rather than alarm.
+ * row a moment later (lib/data/README.md "photonRegistration"). Changing the
+ * number CLEARS the old outcome, so an absent value right after a save means
+ * "in flight", not "never tried" — which is why the phone has to be on file
+ * for this to render at all.
  */
 function RegistrationNote({
   registration,
   hasPhone,
   pendingEdit,
+  retrying,
+  onRetry,
 }: {
   registration: NonNullable<Viewer>["photonRegistration"] | undefined
   hasPhone: boolean
   pendingEdit: boolean
+  retrying: boolean
+  onRetry: () => void
 }) {
   if (!hasPhone && !registration) return null
   if (pendingEdit) {
@@ -317,14 +336,25 @@ function RegistrationNote({
       </p>
     )
   }
-  if (!registration) {
+  if (!registration || retrying) {
     return (
       <p className="pb-2.5 text-[12.5px] leading-relaxed text-ink-3">
         Registering…
       </p>
     )
   }
-  if (registration.status === "skipped") return null
+  if (registration.status === "skipped") {
+    /* No Voice attached to this deployment. Not a failure and not something a
+     * student can act on — say what it is and offer no button. */
+    return (
+      <div className="flex flex-wrap items-center gap-2 pb-2.5">
+        <StatusPill tone="neutral">Registration off</StatusPill>
+        <span className="text-[12.5px] text-ink-2">
+          This deployment has no texting line attached.
+        </span>
+      </div>
+    )
+  }
   return (
     <div className="flex flex-wrap items-center gap-2 pb-2.5">
       {registration.status === "registered" ? (
@@ -337,10 +367,12 @@ function RegistrationNote({
       ) : (
         <>
           <StatusPill tone="red">Not registered</StatusPill>
-          <span className="text-[12.5px] leading-relaxed text-ink-2">
+          <span className="min-w-0 flex-1 text-[12.5px] leading-relaxed text-ink-2">
             Couldn&apos;t register: {registration.error ?? "unknown error"}.
-            Correct the number and save again to retry.
           </span>
+          <Button size="xs" variant="secondary" onClick={onRetry}>
+            Retry
+          </Button>
         </>
       )}
     </div>

@@ -353,21 +353,28 @@ function BatchCard({
 }) {
   const approveMany = useMutation(api.changes.approveMany)
   const [open, setOpen] = React.useState(false)
-  const [approving, setApproving] = React.useState(false)
+  /* `finishing` is not a spinner waiting on a promise: the mutation already
+   * returned. A batch bigger than one page hands the rest to a scheduled
+   * continuation, and the card is only gone once the subscription has no
+   * pending rows left for the run — which unmounts this component. So the
+   * state is cleared by disappearing, not by a timer. */
+  const [status, setStatus] = React.useState<"idle" | "approving" | "finishing">(
+    "idle"
+  )
   const [error, setError] = React.useState<string | null>(null)
 
   const onApproveAll = async () => {
-    setApproving(true)
+    setStatus("approving")
     setError(null)
     try {
       // Batch mode, not a list of ids: Core approves every pending change the
       // caller still has from that run, so a card rendered a second ago and a
       // row that landed since are both covered.
-      await approveMany({ batchId, via: "web" })
+      const result = await approveMany({ batchId, via: "web" })
+      setStatus(result.continued ? "finishing" : "idle")
     } catch (cause) {
       setError(errorMessage(cause))
-    } finally {
-      setApproving(false)
+      setStatus("idle")
     }
   }
 
@@ -422,10 +429,14 @@ function BatchCard({
           <Button
             size="xs"
             variant="primary"
-            disabled={approving}
+            disabled={status !== "idle"}
             onClick={() => void onApproveAll()}
           >
-            {approving ? "Approving…" : "Approve all"}
+            {status === "approving"
+              ? "Approving…"
+              : status === "finishing"
+                ? "Finishing up…"
+                : "Approve all"}
           </Button>
         </span>
       </div>
