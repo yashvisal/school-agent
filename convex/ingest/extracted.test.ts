@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest"
+import { describe, expect, test, vi } from "vitest"
 
 import cmuExpected from "../../fixtures/extraction/sites/cmu-15-213-schedule-fall-2026/expected.json"
 import scheduleExpected from "../../fixtures/extraction/schedules/weekly-grid-text/expected.json"
@@ -282,6 +282,93 @@ describe("change batching", () => {
       .withIdentity({ subject: s.clerkId })
       .mutation(api.changes.approveMany, { batchId, via: "web" })
     expect(again.approved).toBe(0)
+  })
+
+  test("a batch larger than one page finishes in the background", async () => {
+    const t = setupTest()
+    const s = await seed(t, { kind: "syllabus", timezone: NY })
+    const batchId = `${s.sourceId}:oversized`
+
+    // 450 rows: more than two full pages, so the first call cannot finish it.
+    // `other` with no entity id is a record-only change — the drain is what is
+    // under test here, not what each row applies.
+    const total = 450
+    await t.run(async (ctx) => {
+      for (let i = 0; i < total; i++) {
+        await ctx.db.insert("changes", {
+          studentId: s.studentId,
+          kind: "other",
+          entity: { table: "deadlines" },
+          origin: "syllabus",
+          tier: "needs_approval",
+          status: "pending",
+          snapshotIds: [],
+          batchId,
+          createdAt: 1_700_000_000_000 + i,
+        })
+      }
+    })
+
+    const first = await t
+      .withIdentity({ subject: s.clerkId })
+      .mutation(api.changes.approveMany, { batchId, via: "web" })
+    // Honest about what THIS call did, rather than reporting success for rows
+    // it never touched.
+    expect(first.approved).toBe(200)
+    expect(first.continued).toBe(true)
+
+    vi.useFakeTimers()
+    try {
+      await t.finishAllScheduledFunctions(vi.runAllTimers)
+    } finally {
+      vi.useRealTimers()
+    }
+
+    const left = await t.run(async (ctx) =>
+      ctx.db
+        .query("changes")
+        .withIndex("by_student_status", (q) =>
+          q.eq("studentId", s.studentId).eq("status", "pending")
+        )
+        .take(500)
+    )
+    expect(left).toHaveLength(0)
+    const approved = await t.run(async (ctx) =>
+      (await ctx.db.query("changes").take(1000)).filter(
+        (c) => c.batchId === batchId && c.status === "approved"
+      )
+    )
+    expect(approved).toHaveLength(total)
+  })
+
+  test("rows sharing a creation time are not skipped", async () => {
+    const t = setupTest()
+    const s = await seed(t, { kind: "syllabus", timezone: NY })
+    const batchId = `${s.sourceId}:ties`
+
+    // Same `createdAt` on every row — the shape a `_creationTime` cursor over
+    // the pending index could walk straight past.
+    const at = 1_700_000_000_000
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 40; i++) {
+        await ctx.db.insert("changes", {
+          studentId: s.studentId,
+          kind: "other",
+          entity: { table: "deadlines" },
+          origin: "syllabus",
+          tier: "needs_approval",
+          status: "pending",
+          snapshotIds: [],
+          batchId,
+          createdAt: at,
+        })
+      }
+    })
+
+    const result = await t
+      .withIdentity({ subject: s.clerkId })
+      .mutation(api.changes.approveMany, { batchId, via: "web" })
+    expect(result).toEqual({ approved: 40, skipped: 0, continued: false })
   })
 
   test("approveMany refuses being handed both selectors, or neither", async () => {

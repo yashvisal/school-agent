@@ -1,6 +1,7 @@
 import { paginationOptsValidator } from "convex/server"
 import { v } from "convex/values"
 
+import { internal } from "./_generated/api"
 import type { MutationCtx } from "./_generated/server"
 import { internalMutation, mutation, query } from "./_generated/server"
 import { getCurrentStudent, requireStudent } from "./lib/auth"
@@ -192,19 +193,24 @@ export const approve = mutation({
  *
  * Two ways to name the set. `changeIds` is the explicit one (the student ticked
  * rows); `batchId` approves everything still pending from one extraction run,
- * which is what the "18 items from CHEM 202's syllabus" card actually means —
- * and it stays correct when the queue holds more rows than one page showed.
+ * which is what the "18 items from CHEM 202's syllabus" card actually means.
+ *
+ * `approved` / `skipped` are always what THIS call did. A batch larger than one
+ * page finishes in the background and comes back `continued: true`, so a caller
+ * that wants to can show "finishing up…" — and, more importantly, so the count
+ * is never a claim the transaction did not make good on.
  */
-const BATCH_SCAN_PAGE = 200
-const BATCH_SCAN_PAGES = 5
-
 export const approveMany = mutation({
   args: {
     changeIds: v.optional(v.array(v.id("changes"))),
     batchId: v.optional(v.string()),
     via: v.union(v.literal("web"), v.literal("chat")),
   },
-  returns: v.object({ approved: v.number(), skipped: v.number() }),
+  returns: v.object({
+    approved: v.number(),
+    skipped: v.number(),
+    continued: v.boolean(),
+  }),
   handler: async (ctx, args) => {
     if ((args.changeIds === undefined) === (args.batchId === undefined)) {
       throw new Error("400: pass exactly one of changeIds or batchId")
@@ -213,7 +219,21 @@ export const approveMany = mutation({
     if (!student) throw new Error("401: not signed in")
 
     if (args.batchId !== undefined) {
-      return await approveBatch(ctx, student._id, args.batchId, args.via)
+      const { approved, more } = await approveBatchPage(
+        ctx,
+        student._id,
+        args.batchId,
+        args.via
+      )
+      if (more) {
+        await ctx.scheduler.runAfter(0, internal.changes.approveBatchContinue, {
+          studentId: student._id,
+          batchId: args.batchId,
+          via: args.via,
+          hops: 1,
+        })
+      }
+      return { approved, skipped: 0, continued: more }
     }
 
     const changeIds = args.changeIds ?? []
@@ -234,7 +254,8 @@ export const approveMany = mutation({
       await approveChangeInternal(ctx, changeId, args.via)
       approved++
     }
-    return { approved, skipped }
+    // An explicit id list is bounded at 200 and always finishes in this call.
+    return { approved, skipped, continued: false }
   },
 })
 
@@ -330,51 +351,85 @@ export const expireStale = internalMutation({
 })
 
 /**
- * Every still-pending change from one extraction run, approved.
+ * One page of a batch drain: approve up to `BATCH_PAGE` still-pending changes
+ * from this run, and say whether there is more.
  *
- * Walks the caller's OWN pending index (`by_student_status`) and filters on the
- * batch, rather than looking the batch up directly: the batch id is a
- * client-supplied string, and a scan that starts from the student can never
- * reach another student's rows however it is spelled. A student's pending queue
- * is tens of rows, so the scan is cheap; `BATCH_SCAN_PAGES` is a
- * transaction-budget backstop, and a second tap picks up any remainder
- * (already-approved rows are no-ops).
+ * The range is `(studentId, "pending", batchId)`. Student first, so a
+ * caller-supplied batch id can never select across tenants however it is
+ * spelled. `status` before `batchId` is what makes the drain terminate without
+ * a cursor: approving a row moves it out of the very range being read, so each
+ * pass is strictly smaller than the last and a full page always means real
+ * remaining work. A `_creationTime` cursor over the whole pending index — the
+ * first shape of this — could skip rows sharing a creation time, and could spin
+ * on a full page that happened to contain none of the batch.
  */
-async function approveBatch(
+const BATCH_PAGE = 200
+
+async function approveBatchPage(
   ctx: MutationCtx,
   studentId: Id<"students">,
   batchId: string,
   via: "web" | "chat"
-): Promise<{ approved: number; skipped: number }> {
-  const matches: Id<"changes">[] = []
-  let cursor: number | undefined
+): Promise<{ approved: number; more: boolean }> {
+  const rows = await ctx.db
+    .query("changes")
+    .withIndex("by_student_status_batchId", (q) =>
+      q.eq("studentId", studentId).eq("status", "pending").eq("batchId", batchId)
+    )
+    .take(BATCH_PAGE)
 
-  for (let page = 0; page < BATCH_SCAN_PAGES; page++) {
-    const after = cursor
-    const rows = await ctx.db
-      .query("changes")
-      .withIndex("by_student_status", (q) => {
-        const base = q.eq("studentId", studentId).eq("status", "pending")
-        return after === undefined ? base : base.gt("_creationTime", after)
-      })
-      .take(BATCH_SCAN_PAGE)
-    if (rows.length === 0) break
-    cursor = rows[rows.length - 1]._creationTime
-    for (const row of rows) {
-      if (row.batchId === batchId) matches.push(row._id)
-    }
-    if (rows.length < BATCH_SCAN_PAGE) break
-  }
-
-  // Collected first, then approved: approving mutates `status`, which is the
-  // very index the scan walks.
-  let approved = 0
-  for (const changeId of matches) {
+  // Collected first, then approved: approving mutates `status`, which is part
+  // of the index this read walks.
+  const ids = rows.map((row) => row._id)
+  for (const changeId of ids) {
     await approveChangeInternal(ctx, changeId, via)
-    approved++
   }
-  return { approved, skipped: 0 }
+  return { approved: ids.length, more: ids.length === BATCH_PAGE }
 }
+
+/**
+ * A batch bigger than one page finishes in the background rather than being
+ * silently half-approved — the earlier version reported success having stopped
+ * at its scan cap, which is the worst of both (the student sees "approved" and
+ * the queue still holds the rest).
+ *
+ * Each hop is its own transaction, so a 2,000-item parse does not have to fit
+ * in one. `hops` is a runaway guard, not a limit anyone should reach: a page is
+ * 200 rows and every hop approves a full page, so 50 hops is 10,000 changes
+ * from a single upload. Reaching it means something is wrong, and it says so
+ * rather than looping.
+ */
+const MAX_BATCH_HOPS = 50
+
+export const approveBatchContinue = internalMutation({
+  args: {
+    studentId: v.id("students"),
+    batchId: v.string(),
+    via: v.union(v.literal("web"), v.literal("chat")),
+    hops: v.number(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    // Identity was proven by the public mutation that started the drain; this
+    // is internal and reachable only from that scheduler chain.
+    const { more } = await approveBatchPage(ctx, args.studentId, args.batchId, args.via)
+    if (!more) return null
+    if (args.hops >= MAX_BATCH_HOPS) {
+      console.error(
+        `changes.approveBatchContinue: batch ${args.batchId} still has pending rows ` +
+          `after ${MAX_BATCH_HOPS} hops (${MAX_BATCH_HOPS * BATCH_PAGE} changes); stopping`
+      )
+      return null
+    }
+    await ctx.scheduler.runAfter(0, internal.changes.approveBatchContinue, {
+      studentId: args.studentId,
+      batchId: args.batchId,
+      via: args.via,
+      hops: args.hops + 1,
+    })
+    return null
+  },
+})
 
 function clampLimit(limit: number | undefined, fallback: number, max: number) {
   if (limit === undefined) return fallback

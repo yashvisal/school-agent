@@ -217,7 +217,7 @@ describe("approveMany", () => {
         changeIds: [foreignChange, ownChange],
         via: "web",
       })
-    expect(result).toEqual({ approved: 1, skipped: 1 })
+    expect(result).toEqual({ approved: 1, skipped: 1, continued: false })
     const rows = await t.run(async (ctx) => ({
       foreign: await ctx.db.get("changes", foreignChange),
       own: await ctx.db.get("changes", ownChange),
@@ -264,7 +264,7 @@ describe("approveMany", () => {
       changeIds: ids,
       via: "web",
     })
-    expect(result).toEqual({ approved: 2, skipped: 1 })
+    expect(result).toEqual({ approved: 2, skipped: 1, continued: false })
 
     const deadlines = await t.run(async (ctx) => ctx.db.query("deadlines").take(10))
     expect(deadlines.map((d) => d.title).sort()).toEqual([
