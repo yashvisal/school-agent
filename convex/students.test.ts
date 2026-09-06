@@ -764,3 +764,34 @@ describe("registerContact", () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 })
+
+describe("ensure", () => {
+  test("refuses a fixed offset or an unknown zone before writing anything", async () => {
+    const t = setupTest()
+    const as = t.withIdentity({ subject: CLERK_ID })
+
+    await expect(as.mutation(api.students.ensure, { timezone: "+05:30" })).rejects.toThrow("400")
+    await expect(
+      as.mutation(api.students.ensure, { timezone: "Mars/Olympus_Mons" })
+    ).rejects.toThrow("400")
+
+    const rows = await t.run(async (ctx) =>
+      ctx.db
+        .query("students")
+        .withIndex("by_clerkId", (q) => q.eq("clerkId", CLERK_ID))
+        .collect()
+    )
+    expect(rows).toHaveLength(0)
+  })
+
+  test("a real zone provisions the row and a later real zone updates it", async () => {
+    const t = setupTest()
+    const as = t.withIdentity({ subject: CLERK_ID })
+
+    const studentId = await as.mutation(api.students.ensure, { timezone: "America/Los_Angeles" })
+    expect((await load(t, studentId))?.timezone).toBe("America/Los_Angeles")
+
+    await as.mutation(api.students.ensure, { timezone: "America/New_York" })
+    expect((await load(t, studentId))?.timezone).toBe("America/New_York")
+  })
+})

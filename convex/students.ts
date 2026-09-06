@@ -33,6 +33,10 @@ export const ensure = mutation({
   returns: v.id("students"),
   handler: async (ctx, args) => {
     const identity = await requireIdentity(ctx)
+    // Public, and the zone is caller-supplied even though the shell sends the
+    // browser's: an unusable zone makes the morning pass skip this student, and
+    // a bare offset drifts an hour across DST — same rule as `updatePrefs`.
+    if (args.timezone !== undefined) assertTimezone(args.timezone)
     const existing = await ctx.db
       .query("students")
       .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))

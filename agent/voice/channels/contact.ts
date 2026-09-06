@@ -156,8 +156,9 @@ const MAX_USER_PAGES = 20
  */
 type Lookup =
   | { ok: true; userId?: string }
-  | { ok: false; timedOut: true }
-  | { ok: false; timedOut?: false; status: number; text: string }
+  | { ok: false; timedOut: true; unresolved?: false }
+  | { ok: false; timedOut?: false; unresolved: true }
+  | { ok: false; timedOut?: false; unresolved?: false; status: number; text: string }
 
 /**
  * The registered user for this number, if Photon already has one.
@@ -195,11 +196,16 @@ async function findUser(
     const match = users.find((user) => user.phoneNumber === phone)
     if (typeof match?.id === "string") return { ok: true, userId: match.id }
 
-    if (users.length < USER_PAGE_SIZE) break
+    // A short page, or `total` reached, is the END of the list: the number is
+    // conclusively absent. Only then is "not found" a fact.
+    if (users.length < USER_PAGE_SIZE) return { ok: true }
     const total = totalOf(found.json)
-    if (total !== undefined && offset + users.length >= total) break
+    if (total !== undefined && offset + users.length >= total) return { ok: true }
   }
-  return { ok: true }
+  // Every page was full and none was the last: the list may go on past the
+  // cap. That is not "absent" — `search` is a partial match, not an exact
+  // number lookup — so creating here could duplicate a user further down.
+  return { ok: false, unresolved: true }
 }
 
 /**
@@ -254,6 +260,18 @@ export default defineChannel({
             // retries with a fresh budget.
             console.error("[voice/contact] lookup timed out", { to: last4(phone) })
             return outOfTime()
+          }
+          if (existing.unresolved) {
+            // Fail closed: the page cap was reached without an exact match and
+            // without the list ending, so whether the number exists is unknown.
+            console.error("[voice/contact] lookup unresolved at the page cap", {
+              to: last4(phone),
+              pages: MAX_USER_PAGES,
+            })
+            return Response.json(
+              { error: `lookup unresolved: ${MAX_USER_PAGES} pages without an exact match` },
+              { status: 502 },
+            )
           }
           console.error("[voice/contact] lookup failed", {
             to: last4(phone),
