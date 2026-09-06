@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest"
 
-import { commitPlanInputSchema } from "./commitPlan"
+import { commitPlanInputSchema } from "../tools/commitPlan"
 
 /**
  * The tool's own boundary. Core enforces all of this again and answers a `400`
