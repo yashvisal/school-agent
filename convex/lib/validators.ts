@@ -75,6 +75,17 @@ export const availabilityV = v.object({
 
 export const studentStatusV = v.union(v.literal("active"), v.literal("paused"))
 
+/**
+ * How much the student wants to hear from Voice beyond the morning push. A
+ * stated preference, not a computed cadence: the agent reads it, nothing here
+ * turns it into a number of messages.
+ */
+export const checkInPreferenceV = v.union(
+  v.literal("fewer"),
+  v.literal("normal"),
+  v.literal("more")
+)
+
 export const courseStatusV = v.union(
   v.literal("active"),
   v.literal("concluded"),
@@ -254,6 +265,8 @@ export const studentFields = {
    * from; unset means `DEFAULT_MORNING_HOUR` (7am local).
    */
   morningHourLocal: v.optional(v.number()),
+  /** How chatty the student wants Voice to be (`checkInPreferenceV`). */
+  checkInPreference: v.optional(checkInPreferenceV),
   /**
    * Lifetime count of deduped inbound iMessages (`inboundMessages` rows have a
    * TTL; the count does not). Photon suppresses proactive sends to a contact
