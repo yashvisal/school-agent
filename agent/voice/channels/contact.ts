@@ -39,6 +39,27 @@ const SPECTRUM_BASE = "https://spectrum.photon.codes"
 /** Registration is a fast REST call; anything slower is a Photon problem. */
 const SPECTRUM_TIMEOUT_MS = 10_000
 
+/**
+ * The deadline for the WHOLE route, deliberately shorter than Core's
+ * `VOICE_CONTACT_TIMEOUT_MS` (15s, `convex/students.ts`). Per-call timeouts are
+ * not enough on their own: a paginated lookup of 10s pages outlives Core's
+ * budget, and then Core has recorded `failed` and stopped listening while this
+ * route pages on and possibly creates the user — Core believing the number is
+ * unregistered at the exact moment Photon registers it. Answering inside the
+ * caller's budget is what keeps the two ends' views of a number in step.
+ */
+const ROUTE_DEADLINE_MS = 12_000
+
+/** Below this there is no time left to make a call worth making. */
+const MIN_CALL_MS = 500
+
+/** What is left of the route's deadline, measured from one start time. */
+type Budget = { remaining: () => number }
+
+const budgetFrom = (startedAt: number): Budget => ({
+  remaining: () => ROUTE_DEADLINE_MS - (Date.now() - startedAt),
+})
+
 /** Never log a whole number — same rule as `trigger.ts`. */
 const last4 = (phone: string) => `…${phone.slice(-4)}`
 
@@ -98,6 +119,7 @@ function userIdOf(payload: unknown): string | undefined {
 async function spectrum(
   creds: Credentials,
   path: string,
+  budget: Budget,
   init?: { method: "POST"; body: unknown },
 ): Promise<{ ok: boolean; status: number; text: string; json: unknown }> {
   const response = await fetch(`${SPECTRUM_BASE}/projects/${creds.projectId}${path}`, {
@@ -107,7 +129,10 @@ async function spectrum(
       ...(init ? { "content-type": "application/json" } : {}),
     },
     body: init ? JSON.stringify(init.body) : undefined,
-    signal: AbortSignal.timeout(SPECTRUM_TIMEOUT_MS),
+    // Whichever runs out first: this call's own patience or the route's.
+    signal: AbortSignal.timeout(
+      Math.min(SPECTRUM_TIMEOUT_MS, Math.max(budget.remaining(), MIN_CALL_MS)),
+    ),
   })
   const text = await response.text()
   let json: unknown = null
@@ -125,25 +150,44 @@ const MAX_USER_PAGES = 20
 
 /**
  * `{ ok: false }` means we do not KNOW whether the number is registered, which
- * is not the same as knowing it is not.
+ * is not the same as knowing it is not. `timedOut` is that same ignorance
+ * arrived at by running out of clock rather than by an error.
  */
-type Lookup = { ok: true; userId?: string } | { ok: false; status: number; text: string }
+type Lookup =
+  | { ok: true; userId?: string }
+  | { ok: false; timedOut: true }
+  | { ok: false; timedOut?: false; status: number; text: string }
 
 /**
  * The registered user for this number, if Photon already has one.
  *
  * Paginated: `search` is not documented to match an exact phone number, so a
  * project with more registered users than one page could hide the match behind
- * an offset. Walks until the number is found, the list is exhausted, or the
- * page bound is hit.
+ * an offset. Walks until the number is found, the list is exhausted, the page
+ * bound is hit, or the route's budget runs out — a walk that outlives the
+ * caller's patience has stopped being useful to anyone.
  */
-async function findUser(creds: Credentials, phone: string): Promise<Lookup> {
+async function findUser(
+  creds: Credentials,
+  phone: string,
+  budget: Budget,
+): Promise<Lookup> {
   for (let page = 0; page < MAX_USER_PAGES; page++) {
+    if (budget.remaining() < MIN_CALL_MS) return { ok: false, timedOut: true }
+
     const offset = page * USER_PAGE_SIZE
-    const found = await spectrum(
-      creds,
-      `/users/?search=${encodeURIComponent(phone)}&limit=${USER_PAGE_SIZE}&offset=${offset}`,
-    )
+    let found
+    try {
+      found = await spectrum(
+        creds,
+        `/users/?search=${encodeURIComponent(phone)}&limit=${USER_PAGE_SIZE}&offset=${offset}`,
+        budget,
+      )
+    } catch (error) {
+      // An abort with no budget left is the deadline, not a Photon fault.
+      if (budget.remaining() < MIN_CALL_MS) return { ok: false, timedOut: true }
+      throw error
+    }
     if (!found.ok) return { ok: false, status: found.status, text: found.text }
 
     const users = usersOf(found.json)
@@ -176,6 +220,8 @@ export default defineChannel({
         return Response.json({ error: parsed.error.issues }, { status: 400 })
       }
       const { phone, firstName } = parsed.data
+      // One clock for the whole request, started before any network call.
+      const budget = budgetFrom(Date.now())
 
       const creds = credentials()
       if (!creds) {
@@ -191,8 +237,16 @@ export default defineChannel({
         // that FAILED stops here rather than falling through to create: we
         // would be creating blind, and a duplicate user for a number Photon
         // already holds is worse than telling Core to retry.
-        const existing = await findUser(creds, phone)
+        const existing = await findUser(creds, phone, budget)
         if (!existing.ok) {
+          if (existing.timedOut) {
+            // Out of clock is out of knowledge: we never learned whether the
+            // number is registered, so creating now could duplicate a user
+            // Photon already holds. Core records `failed` and the next save
+            // retries with a fresh budget.
+            console.error("[voice/contact] lookup timed out", { to: last4(phone) })
+            return Response.json({ error: "lookup timed out" }, { status: 502 })
+          }
           console.error("[voice/contact] lookup failed", {
             to: last4(phone),
             status: existing.status,
@@ -207,7 +261,7 @@ export default defineChannel({
           )
         }
 
-        const created = await spectrum(creds, "/users/", {
+        const created = await spectrum(creds, "/users/", budget, {
           method: "POST",
           body: {
             type: "shared",
@@ -221,7 +275,7 @@ export default defineChannel({
           // 409 we cannot corroborate stays a 502, so nothing ever tells Core a
           // number is reachable on the strength of an error code alone.
           if (created.status === 409) {
-            const raced = await findUser(creds, phone)
+            const raced = await findUser(creds, phone, budget)
             if (raced.ok && raced.userId) {
               return Response.json(
                 { status: "already_registered", userId: raced.userId },

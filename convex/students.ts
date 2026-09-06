@@ -344,7 +344,15 @@ export const updatePrefs = mutation({
  */
 export const VOICE_CONTACT_PATH = "/eve/agents/voice/eve/v1/contact"
 
-/** How long the registration POST may take before it is a failure. */
+/**
+ * How long the registration POST may take before it is a failure.
+ *
+ * The route answers well inside this: `ROUTE_DEADLINE_MS` in
+ * `agent/voice/channels/contact.ts` is 12s, deliberately shorter. If it were
+ * longer, this side would record `failed` and stop listening while the route
+ * kept paging and might still create the user — Core believing a number is
+ * unregistered at the moment Photon registers it. Raise the two together.
+ */
 export const VOICE_CONTACT_TIMEOUT_MS = 15_000
 
 type RegistrationOutcome = {
