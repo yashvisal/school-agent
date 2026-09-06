@@ -401,11 +401,15 @@ then commit the 1–3 blocks you actually named.
 | `planRunId` | no | The run the plan came from, stored on each change for traceability. Must belong to this student and this date. |
 | `now` | no | Wall clock in ms, as in §3. |
 
-Each pick identifies its option the way §3 handed it to you, in this order:
+Each pick carries **exactly one complete identity**, taken from §3 in this order:
 
 1. `taskId`, when the option has one;
 2. else `deadlineId`;
-3. else `title` + `courseId`, for free-standing work with neither id.
+3. else `title` **and** `courseId` together, for free-standing work with neither id.
+
+A half-named pick — a `title` with no `courseId`, or nothing at all — is a `400`
+naming it. That is a different error from "matches nothing in the feasible set",
+and says so.
 
 `startMin`/`endMin` are minutes from local midnight and describe the block you
 told the student about. Do not round them, shift them, or make them up.
@@ -429,7 +433,11 @@ you from — so the set being checked is the set you were shown. For each pick:
   `title` + `courseId`), and no two picks may name the same work;
 - its block must sit inside a free window that option can use — the window a
   `fits` entry points at, which is availability minus class blocks minus the past;
-- it must end by the due minute on the due day.
+- it must end by the due minute on the due day;
+- and it must not overlap any other pick in the same commit. A day is a sequence,
+  not a set: two blocks claiming the same minutes is not a plan the student can
+  act on. Back-to-back is fine (`11:15–1:15` then `1:15–2:15`); overlapping is a
+  `400: picks "…" and "…" overlap (12pm–1:15pm)`.
 
 The window is the unit, not the `fits` span itself: a `fits` entry is Core's
 *suggested* slot (it starts at the head of the window and runs one effort estimate
@@ -451,6 +459,19 @@ made themselves, and tasks already `done` or `skipped` (their planned day is a
 record of what happened, not a plan to revise).
 
 So a replan sends the **whole new day**, never just the block that moved.
+
+### Moving work between days
+
+A pick may name a task currently planned on a *different* date, in either
+direction: work that slipped ("didn't do it friday, do it saturday") and work
+pulled forward from tomorrow into today. This is the point of the product, not an
+error — commit it for the day it is actually happening and it comes off the old
+day by itself.
+
+It is never silent, though. The `task_updated` change carries `before` with the
+day it came off and the block it had there, and its `reason` reads
+`replanned from 2026-09-11 in the thread for 2026-09-12`, so the feed shows a
+move rather than a task that appeared on a new date out of nowhere.
 
 ### Idempotency
 
@@ -482,7 +503,8 @@ A pick with a `deadlineId` and no task yet emits one `task_created`
 (`type: "do"`, `status: "todo"`, `createdBy: "agent"`, carrying the deadline's
 title and the option's effort estimate); a pick with an existing task emits one
 `task_updated`. Each change's `reason` reads `planned in the thread for <date>`,
-or `replanned …` when that task was already on a day.
+`replanned in the thread for <date>` when the block moved within the same day, or
+`replanned from <other date> in the thread for <date>` when the work moved days.
 
 ---
 
