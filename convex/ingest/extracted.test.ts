@@ -341,6 +341,80 @@ describe("change batching", () => {
     expect(approved).toHaveLength(total)
   })
 
+  test("one row that fails to apply does not take the batch down with it", async () => {
+    const t = setupTest()
+    const s = await seed(t, { kind: "syllabus", timezone: NY })
+    const batchId = `${s.sourceId}:mixed`
+
+    // A course id from ANOTHER student on the failing row: `assertRefsOwned`
+    // throws on apply, which is exactly the shape that used to abort the whole
+    // page transaction and never schedule the continuation.
+    const foreignCourseId = await t.run(async (ctx) => {
+      const otherStudentId = await ctx.db.insert("students", {
+        clerkId: "user_mixed_stranger",
+        timezone: NY,
+        classBlocks: [],
+        availability: { weekly: [], exceptions: [] },
+        status: "active",
+      })
+      return await ctx.db.insert("courses", {
+        studentId: otherStudentId,
+        name: "Someone else's course",
+        sourceRefs: {},
+        status: "active",
+        provenance: { source: "manual", sourceRef: "test", confidence: 1 },
+      })
+    })
+
+    const good = 4
+    await t.run(async (ctx) => {
+      for (let i = 0; i < good; i++) {
+        await ctx.db.insert("changes", {
+          studentId: s.studentId,
+          kind: "other",
+          entity: { table: "deadlines" },
+          origin: "syllabus",
+          tier: "needs_approval",
+          status: "pending",
+          snapshotIds: [],
+          batchId,
+          createdAt: 1_700_000_000_000 + i,
+        })
+      }
+      await ctx.db.insert("changes", {
+        studentId: s.studentId,
+        kind: "task_created",
+        entity: { table: "tasks" },
+        after: { title: "Read ch. 3", courseId: foreignCourseId },
+        origin: "syllabus",
+        tier: "needs_approval",
+        status: "pending",
+        snapshotIds: [],
+        batchId,
+        createdAt: 1_700_000_000_099,
+      })
+    })
+
+    const result = await t
+      .withIdentity({ subject: s.clerkId })
+      .mutation(api.changes.approveMany, { batchId, via: "web" })
+
+    expect(result.approved).toBe(good)
+    expect(result.skipped).toBe(1)
+
+    // The failed row is LEFT PENDING, not rejected: a student must not lose a
+    // card because a neighbour in the same parse failed. It stays approvable on
+    // its own, where the real error is visible.
+    const rows = await changesOf(t, s.studentId)
+    const failed = rows.find((c) => c.kind === "task_created")
+    expect(failed?.status).toBe("pending")
+    expect(
+      rows.filter((c) => c.kind === "other").every((c) => c.status === "approved")
+    ).toBe(true)
+    // And its write rolled back — no task was created from the half-applied row.
+    expect(await t.run(async (ctx) => ctx.db.query("tasks").take(5))).toEqual([])
+  })
+
   test("rows sharing a creation time are not skipped", async () => {
     const t = setupTest()
     const s = await seed(t, { kind: "syllabus", timezone: NY })

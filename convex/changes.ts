@@ -219,7 +219,7 @@ export const approveMany = mutation({
     if (!student) throw new Error("401: not signed in")
 
     if (args.batchId !== undefined) {
-      const { approved, more } = await approveBatchPage(
+      const { approved, skipped, more } = await approveBatchPage(
         ctx,
         student._id,
         args.batchId,
@@ -233,7 +233,9 @@ export const approveMany = mutation({
           hops: 1,
         })
       }
-      return { approved, skipped: 0, continued: more }
+      // `skipped` here is rows whose apply failed and were left pending, not
+      // rows deliberately passed over.
+      return { approved, skipped, continued: more }
     }
 
     const changeIds = args.changeIds ?? []
@@ -365,12 +367,35 @@ export const expireStale = internalMutation({
  */
 const BATCH_PAGE = 200
 
+/**
+ * Approve exactly one change. Exists to be called with `ctx.runMutation` from
+ * the batch drain, which makes it a SUBTRANSACTION: if this row's apply throws
+ * — a deadline whose course was deleted out from under it, anything
+ * `assertRefsOwned` refuses — its writes roll back on their own and the caller
+ * keeps everything it has already committed.
+ *
+ * Calling `approveChangeInternal` inline instead, as the first version did,
+ * put every row in one transaction: a single bad row aborted the whole page,
+ * approved nothing, and never scheduled the continuation. A `try/catch` around
+ * an inline call does not help — by then the partial writes are already in the
+ * caller's transaction and cannot be undone.
+ */
+export const approveOne = internalMutation({
+  args: {
+    changeId: v.id("changes"),
+    via: v.union(v.literal("web"), v.literal("chat")),
+  },
+  returns: proposeResultV,
+  handler: async (ctx, args) =>
+    await approveChangeInternal(ctx, args.changeId, args.via),
+})
+
 async function approveBatchPage(
   ctx: MutationCtx,
   studentId: Id<"students">,
   batchId: string,
   via: "web" | "chat"
-): Promise<{ approved: number; more: boolean }> {
+): Promise<{ approved: number; skipped: number; more: boolean }> {
   const rows = await ctx.db
     .query("changes")
     .withIndex("by_student_status_batchId", (q) =>
@@ -381,10 +406,31 @@ async function approveBatchPage(
   // Collected first, then approved: approving mutates `status`, which is part
   // of the index this read walks.
   const ids = rows.map((row) => row._id)
+  let approved = 0
+  let skipped = 0
   for (const changeId of ids) {
-    await approveChangeInternal(ctx, changeId, via)
+    try {
+      await ctx.runMutation(internal.changes.approveOne, { changeId, via })
+      approved++
+    } catch (error) {
+      // LEFT PENDING, deliberately. The alternative — auto-rejecting the row
+      // with the error as its reason — destroys a card the student never
+      // decided on because a neighbour in the same parse failed. Pending is
+      // recoverable: the row stays in the queue, the student can approve it
+      // alone and see the real error, and the nightly expiry still sweeps it if
+      // it is never resolved.
+      skipped++
+      console.error(
+        `changes.approveBatchPage: ${changeId} in batch ${batchId} failed to apply; ` +
+          `left pending. ${error instanceof Error ? error.message : String(error)}`
+      )
+    }
   }
-  return { approved: ids.length, more: ids.length === BATCH_PAGE }
+
+  // Continue only while the page was full AND something actually left the
+  // range. Rows that failed stay pending at the front of it, so a page that
+  // approves nothing would otherwise re-read the same failures forever.
+  return { approved, skipped, more: ids.length === BATCH_PAGE && approved > 0 }
 }
 
 /**
