@@ -608,6 +608,52 @@ student-day, so it will not re-send an already-triggered run.
 
 ---
 
+## 8b. Contact registration
+
+A Photon **shared line can only message a registered user**, and nothing
+registered one until now — the founder's number was created by hand during the
+spike. So whenever a student saves a phone in Settings, `api.students.updatePrefs`
+schedules `internal.students.registerContact`, which asks Voice to register it.
+Core does not talk to Spectrum directly: the Photon project credentials live only
+on the Voice host.
+
+```http
+POST {EVE_VOICE_URL}/eve/agents/voice/eve/v1/contact
+x-voice-trigger-secret: {VOICE_TRIGGER_SECRET}
+Content-Type: application/json
+
+{ "phone": "+15551234567", "firstName": "Yash" }
+```
+
+`firstName` is optional and Core sends none today (there is no name on
+`students`). The route (`agent/voice/channels/contact.ts`) checks the secret,
+validates E.164, then looks the number up through Spectrum's REST user API
+(`GET /projects/{projectId}/users/?search=…`, basic auth `projectId:projectSecret`)
+and creates it only if absent (`POST /projects/{projectId}/users/` with
+`{ type: "shared", phoneNumber, firstName? }`). Answers:
+
+| Status | Body | Meaning |
+|---|---|---|
+| `200` | `{ "status": "registered", "userId": "…" }` | Newly registered. |
+| `200` | `{ "status": "already_registered", "userId": "…" }` | Photon already knew the number — registration is idempotent, and a retry is free. |
+| `400` | `{ "error": [ … ] }` | Not an E.164 number. |
+| `401` | `unauthorized` | Wrong or missing `x-voice-trigger-secret`. |
+| `502` | `{ "error": "…" }` | Photon credentials missing on the Voice host, or Spectrum refused/timed out. |
+
+Only the last four digits of a number are ever logged.
+
+Core records the outcome on `students.photonRegistration`
+(`{ status: "registered" | "failed" | "skipped", at, error? }`) via an internal
+mutation — **not** through `changes`: this is routing bookkeeping about our own
+transport, like `inboundCount`, not a fact about the student's semester. Face's
+Settings reads it to say "we can text this number" or "couldn't register — try
+again". Same skipped/failed semantics as §8: no `EVE_VOICE_URL` or no
+`VOICE_TRIGGER_SECRET` records `skipped` and never POSTs unauthenticated; a
+non-2xx or a 15s timeout records `failed`, and re-saving the number retries.
+
+Re-run by hand with
+`npx convex run students:registerContact '{"studentId": "j57a..."}'`.
+
 ## 9. Deployment environment
 
 Set on the **Convex** deployment (`npx convex env set NAME value`), per
@@ -628,6 +674,11 @@ process serving the eve agent):
 | `CORE_URL` | Core's HTTP Actions base (`https://<deployment>.convex.site`). Falls back to `NEXT_PUBLIC_CONVEX_SITE_URL`, which co-located deploys already have. |
 | `VOICE_TRIGGER_SECRET` | Same value as the Convex deployment's — the trigger route checks it. |
 | `VOICE_DEV_PHONE` | Optional, dev/evals only: stands in for the Photon principal on channels with no Photon auth. Still resolves through Core. |
+
+Contact registration (§8b) needs **nothing new**: it reuses `EVE_VOICE_URL` and
+`VOICE_TRIGGER_SECRET` on the Convex side, and the Voice host's existing
+`IMESSAGE_PROJECT_ID` / `IMESSAGE_PROJECT_SECRET` (already set for the Photon
+channel) for the Spectrum call.
 
 ---
 
@@ -653,6 +704,8 @@ routes above.
 | `api.deadlines.list` | query | Deadlines + `pendingChangeId` annotation, for Face. |
 | `api.tasks.list` | query | Tasks, identity-scoped, for Face. |
 | `api.changes.feed` | query | The change feed, identity-scoped, for Face. |
+| `api.students.updatePrefs` | mutation | Settings: the student edits their own row (§8b). |
+| `internal.students.registerContact` | internalAction | Register a phone with Photon (§8b). |
 | `internal.nightly.tick` | internalAction | Hourly cron entry point. |
 | `internal.nightly.runForStudent` | internalAction | One student, one day. |
 | `internal.nightly.runNow` | internalAction | Manual trigger. |

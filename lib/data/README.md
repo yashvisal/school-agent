@@ -40,7 +40,22 @@ empty array.
 | `api.changes.approveMany` | still needed for onboarding bulk-approve                                   |
 | `api.changes.propose`     | exists as `internal.changes.propose`; a public `origin: "manual"` wrapper is still needed for the Fix button |
 | `api.ingest.sources.add` / `setEnabled` | ✅                                                          |
-| `api.students.updatePrefs`| still needed for Settings                                                  |
+| `api.students.updatePrefs`| ✅ `{ phone?, timezone?, morningHourLocal?, availability?, checkInPreference?, semesterStart?, semesterEnd? }` — all optional, identity-scoped (no `studentId`). Returns `{ studentId, changed: string[] }`; `changed: []` means nothing moved and no change row was written. Throws `400` on an unusable phone/timezone/hour/date and `409: phone already in use`. |
+| `api.students.ensure`     | ✅ `{ timezone? }` → `Id<"students">`. **Face must call it once after sign-in** — every other query returns empty and `updatePrefs` throws `404` until the row exists. |
+
+### `photonRegistration` — for the Settings UI
+
+Saving a phone schedules its registration with Photon (a shared line can only
+message a registered user), and the outcome lands on the student row as
+`photonRegistration: { status: "registered" | "failed" | "skipped", at, error? }`.
+It is written outside `changes` — routing bookkeeping, like `inboundCount` — and
+is absent until the first save. Read it off `api.auth.viewer` (unchanged: it
+returns the whole student row, so the new fields — `morningHourLocal`,
+`checkInPreference`, `photonRegistration` — are already there). Settings should read it as: `registered` → "we
+can text this number"; `failed` → "couldn't register — try again" (re-saving the
+same number retries); `skipped` → this deployment has no Voice attached, so say
+nothing. It arrives asynchronously, a moment after `updatePrefs` returns, so the
+subscription will flip from absent to a status on its own.
 
 ### Known adapter caveats
 
