@@ -5,6 +5,7 @@ import * as React from "react"
 import { ChangeFeed } from "@/components/panels/change-feed"
 import { DeadlinesTable } from "@/components/panels/deadlines-table"
 import { ViewportBody, ViewportHeader } from "@/components/panels/chrome"
+import { PastDeadlinesCard } from "@/components/panels/past-deadlines-card"
 import { TodayPlan } from "@/components/panels/today-plan"
 import { daysAway } from "@/lib/format"
 import { useChanges, useCourses, useDeadlines, useTasks } from "@/lib/data/hooks"
@@ -42,6 +43,10 @@ export function DashboardView() {
         }
       />
       <ViewportBody>
+        {/* The mid-semester backlog blocks the correctness of everything below
+          * it — a plan built around work that was already handed in is wrong —
+          * so it sits above the plan and vanishes once it is answered. */}
+        <PastDeadlinesCard />
         <TodayPlan tasks={tasks} deadlines={deadlines} courses={courses} />
         <ChangeFeed changes={changes} courses={courses} deadlines={deadlines} />
         <DeadlinesTable

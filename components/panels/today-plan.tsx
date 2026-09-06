@@ -100,7 +100,7 @@ export function TodayPlan({
       ) : rows.length === 0 ? (
         <EmptyState
           line="Nothing is planned for today."
-          detail="Tomorrow's plan is built overnight and arrives in the thread first thing. If that's wrong, say so there — the plan is negotiated in the thread, not here."
+          detail="Today's plan lands in the thread at your morning hour. If that's wrong, say so there — the plan is negotiated in the thread, not here."
         />
       ) : (
         <TaskRows

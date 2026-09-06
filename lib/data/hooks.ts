@@ -4,7 +4,7 @@ import { useMemo } from "react"
 import { useQuery } from "convex/react"
 
 import { api } from "@/convex/_generated/api"
-import type { Doc } from "@/convex/_generated/dataModel"
+import type { Doc, Id } from "@/convex/_generated/dataModel"
 import { courseChats } from "./fixtures"
 import type {
   Change,
@@ -60,6 +60,30 @@ function mapProvenance(p: ProvenanceDoc): Provenance {
 /** Real. The Clerk ↔ Convex identity, or `null` when signed out. */
 export function useViewer(): Viewer | undefined {
   return useQuery(api.auth.viewer)
+}
+
+/**
+ * The mid-semester backlog: past-due work whose submission status no source
+ * could settle (core.md "Mid-semester onboarding"). Unlike every other query
+ * here, `pastDeadlineReview` takes a `studentId`, so it waits for the viewer
+ * and stays `undefined` until there is one — signed out or unprovisioned, the
+ * prompt simply never renders.
+ */
+export function usePastDeadlineReview():
+  | { count: number; deadlineIds: Id<"deadlines">[] }
+  | undefined {
+  const viewer = useViewer()
+  const result = useQuery(
+    api.onboarding.pastDeadlineReview,
+    viewer ? { studentId: viewer._id } : "skip"
+  )
+  return useMemo(
+    () =>
+      result
+        ? { count: result.count, deadlineIds: result.deadlines.map((d) => d._id) }
+        : undefined,
+    [result]
+  )
 }
 
 /* ── courses ────────────────────────────────────────────────────────────── */
