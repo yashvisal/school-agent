@@ -687,13 +687,17 @@ process serving the eve agent):
 |---|---|
 | `CORE_AGENT_SECRET` | Same value as the Convex deployment's — the client in `agent/voice/lib/core.ts` sends it on every call. |
 | `CORE_URL` | Core's HTTP Actions base (`https://<deployment>.convex.site`). Falls back to `NEXT_PUBLIC_CONVEX_SITE_URL`, which co-located deploys already have. |
-| `VOICE_TRIGGER_SECRET` | Same value as the Convex deployment's — the trigger route checks it. |
+| `VOICE_TRIGGER_SECRET` | Same value as the Convex deployment's — the trigger route checks it, and so does the contact route (§8b). |
+| `IMESSAGE_PROJECT_ID` | Photon project id. The channel's credentials, and the basic-auth user for the contact route's Spectrum calls — **without it that route answers 502 and every registration is recorded `failed`.** |
+| `IMESSAGE_PROJECT_SECRET` | Photon project secret; the basic-auth password for the same calls. Same 502 if unset. |
+| `IMESSAGE_WEBHOOK_SECRET` | Photon webhook signing secret; rotates whenever the webhook is recreated. |
 | `VOICE_DEV_PHONE` | Optional, dev/evals only: stands in for the Photon principal on channels with no Photon auth. Still resolves through Core. |
 
 Contact registration (§8b) needs **nothing new**: it reuses `EVE_VOICE_URL` and
-`VOICE_TRIGGER_SECRET` on the Convex side, and the Voice host's existing
-`IMESSAGE_PROJECT_ID` / `IMESSAGE_PROJECT_SECRET` (already set for the Photon
-channel) for the Spectrum call.
+`VOICE_TRIGGER_SECRET` on the Convex side, and the `IMESSAGE_PROJECT_ID` /
+`IMESSAGE_PROJECT_SECRET` rows above, which the Photon channel already required.
+Nothing new is not nothing needed — a host serving the trigger route but missing
+the project credentials registers no one.
 
 ---
 
