@@ -11,7 +11,7 @@ Every surface below is one of:
 - **live-verified** — it has run on a real phone, a real account, or a real Canvas token.
 - **deferred** — deliberately not built yet; the plan doc says why.
 
-## Where we are (2026-09-04)
+## Where we are (2026-09-05, after Slice 0 and Slice 1 items 1–5 merged and deployed)
 
 | Area                                   | Status                | Notes                                                                                                                                                  |
 | -------------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -19,26 +19,26 @@ Every surface below is one of:
 | Canvas + iCal adapters, snapshot → diff | implemented           | Built to Instructure's spec on hand-authored fixtures. **Never run against a real token** — see [live-validation.md](./live-validation.md).             |
 | Syllabus / site / schedule extraction  | implemented           | Eval fixtures (MIT, Stanford, CMU, synthetic schedule) scored live in CI; invented dates fail the eval.                                                 |
 | Planner v0 (`feasibleActions`)         | integrated            | Hard-constraint tests; overdue work stays in the set with no fits; pacing signals adjust effort per course.                                             |
-| Nightly pass → Voice trigger           | integrated, **buggy** | Runs at the student's nightly hour (default 4am), computes the *next* day, and texts immediately — so the 4am text describes the day after. Fix in Slice 1. |
+| Morning pass → Voice trigger           | integrated            | Runs at the student's `morningHourLocal` (default 7am), plans *that* day with elapsed hours removed, retries for six hours across local midnight (PR #12). First automatic production run: 2026-09-06 07:00 ET. |
 | Voice on eve + Photon                  | live-verified         | Proactive morning text and a real inbound conversation on the founder's phone (2026-08-31), from a laptop behind a quick tunnel.                       |
 | Inbound dedupe, contact warming        | integrated            | Core-owned; gates the push until the student has texted three times.                                                                                   |
 | Usage logging (Voice)                  | integrated            | Idempotent per model step. The workspace agent's hook is still a console stub.                                                                         |
 | Face shell, two-mode nav, live queries | integrated            | Dashboard, Semester, course Overview, Connectors, per-course Library placeholder, chats in the viewport; every data hook is a Convex subscription except chats. |
-| Web approvals                          | implemented           | Approve, bulk-approve by `batchId`, and an inline **Fix** editor (`proposeManual`, superseding the card it answers). **Re-sync** runs the real poll and stays busy until the source reports one. Types and tests pass; **not yet exercised end to end on the dev deployment**, so not `integrated`.  |
-| Tasks on the Dashboard                 | **not written**       | Nothing persists Voice's picks; the Today panel is empty by construction. Fix in Slice 1.                                                               |
-| Student provisioning                   | implemented           | The shell calls `students.ensure` once per session when Convex reports a signed-in identity with a null viewer, passing the browser's IANA zone.        |
-| Onboarding flow                        | deferred → Slice 2    | Backend pieces exist (uploads, bulk approve, past-deadline resolution); no route, no screens.                                                           |
+| Web approvals, Fix, Re-sync            | implemented           | Approve, bulk-approve by `batchId` (drains to completion in the background; rows that cannot apply stay pending with `applyError`), inline **Fix** (`proposeManual`), real **Re-sync** with a per-source cooldown (PRs #11, #14). Deployed; the click-through in PR #14's body has not yet been run by a person.  |
+| Tasks on the Dashboard                 | integrated            | Voice commits its 1–3 picks through `commitPlan`; Core verifies each against the feasible set and writes task rows at origin `planner`; replans move them (PR #13). Live-verify at the first 7am run.  |
+| Student provisioning + Settings        | implemented           | `students.ensure` on first sign-in; Settings writes prefs through `updatePrefs`; saving a phone registers it with Photon, one attempt in flight, outcome bound to the attempt (PRs #10, #14). Needs a second phone to live-verify. |
+| Onboarding flow                        | forms shipped; wizard deferred | Settings, Connectors add-source, syllabus/schedule upload, batch card, Fix, mid-semester prompt exist (PR #14). The one-route wizard is Slice 1 item 6, Paper first. |
 | Workspace agent + Spike B              | implemented           | Per-session isolation and streaming proven; tools are probes; `propose_change` and usage write nowhere; browser channel 401s in any deployment.        |
 | Course workspace as a builder          | deferred → Slice 4    | Redefined 2026-09-04: [workspace.md](./workspace.md).                                                                                                  |
-| Deployment                             | **none**              | Prod Convex exists with zero tables; the dev deployment's Voice URL points at a dead tunnel; Vercel project is linked but main-branch deploys are disabled. |
+| Deployment                             | live                  | Vercel production + Convex prod, Photon webhook on the stable domain, main deployed 2026-09-05 with all five Slice 1 PRs. See "Deployment" below.        |
 
-Verification on 2026-09-04: `pnpm test` 434/434 across 19 files; `pnpm lint` three image warnings; `pnpm typecheck` fails only on a stale generated file under `.next` that references the removed global Library route (delete `.next`).
+Verification on 2026-09-05 after the merges: `pnpm typecheck` clean; `pnpm lint` three pre-existing image warnings; `pnpm test` 564/564 across 22 files; `pnpm build` (including the eve build for both agents) passes. Lint must run from a tree with no `.claude/worktrees/` copies present, or ESLint walks into them.
 
 ## The slices, in order
 
 Each slice has an owner per workstream and an exit test a person can run. Merge order within a slice: Core first when the schema changes.
 
-### Slice 0 — stand it up (this week)
+### Slice 0 — stand it up — DONE 2026-09-05
 
 The whole loop has only ever run from the founder's laptop. Onboarding ends with "text this number" and replans need a line that stays up overnight, so this comes before everything.
 
@@ -50,7 +50,7 @@ The whole loop has only ever run from the founder's laptop. Onboarding ends with
 
 **Exit test:** a morning text lands on the founder's phone from production with the laptop closed.
 
-### Slice 1 — a new student gets to a correct morning text
+### Slice 1 — a new student gets to a correct morning text — items 1–5 merged 2026-09-05 (PRs #12, #10, #11, #13, #14); items 6 and 7 open
 
 Combined on 2026-09-05 from the earlier "loop correctness" and "onboarding" slices (a planning change, not a code merge — the status table above is the pre-slice state and is updated as PRs land): phone registration only exists so a student can be reached, and that is onboarding. One slice, six PRs, each usable on its own. Order: 1, 2, 3, 5, 4, 6 — forms before the wizard, so real syllabi and a real token can be tested within days and the wizard is designed against that.
 
