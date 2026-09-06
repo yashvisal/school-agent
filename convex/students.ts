@@ -173,15 +173,46 @@ function assertAvailability(availability: Infer<typeof availabilityV>): void {
   })
 }
 
-/**
- * Structural equality for the values this mutation compares. Availability is a
- * nested object, and a Settings form that re-submits an unchanged grid must not
- * mint a change row for it.
- */
+/** Equality for the scalar fields: strings, numbers, and absence. */
 function sameValue(a: unknown, b: unknown): boolean {
-  if (a === b) return true
-  if (a === undefined || b === undefined) return false
-  return JSON.stringify(a) === JSON.stringify(b)
+  return a === b
+}
+
+/**
+ * Availability compared by what it MEANS, not by how it was serialized.
+ *
+ * A client that re-submits the same week with its object keys in another order,
+ * or its blocks in another order, is describing the same week — and
+ * `JSON.stringify` would call it a change and mint a change row for an edit
+ * nobody made. The canonical form reads the fields explicitly and sorts, so
+ * only a real difference in the grid counts.
+ */
+const canonicalBlock = (block: TimeBlock) =>
+  [
+    block.dayOfWeek,
+    block.startMin,
+    block.endMin,
+    block.label ?? "",
+    block.courseId ?? "",
+  ].join("|")
+
+const byBlock = (a: TimeBlock, b: TimeBlock) =>
+  a.dayOfWeek - b.dayOfWeek ||
+  a.startMin - b.startMin ||
+  a.endMin - b.endMin ||
+  canonicalBlock(a).localeCompare(canonicalBlock(b))
+
+const canonicalBlocks = (blocks: readonly TimeBlock[]) =>
+  [...blocks].sort(byBlock).map(canonicalBlock).join(";")
+
+function canonicalAvailability(value: unknown): string {
+  if (value === undefined) return "absent"
+  const availability = value as Infer<typeof availabilityV>
+  const exceptions = [...availability.exceptions]
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map((exception) => `${exception.date}=${canonicalBlocks(exception.blocks)}`)
+    .join(",")
+  return `${canonicalBlocks(availability.weekly)}#${exceptions}`
 }
 
 /**
@@ -284,7 +315,11 @@ export const updatePrefs = mutation({
     for (const key of PREF_KEYS) {
       if (!(key in next)) continue
       const current = (student as Record<string, unknown>)[key]
-      if (sameValue(current, next[key])) continue
+      const unchanged =
+        key === "availability"
+          ? canonicalAvailability(current) === canonicalAvailability(next[key])
+          : sameValue(current, next[key])
+      if (unchanged) continue
       changed.push(key)
       // Convex values cannot be `undefined`; a field the student never set is
       // simply absent from `before`, which reads correctly in the feed.

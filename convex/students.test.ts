@@ -194,6 +194,59 @@ describe("updatePrefs", () => {
     expect(await changesFor(t, studentId)).toHaveLength(0)
   })
 
+  test("the same week described differently is not a change", async () => {
+    const t = setupTest()
+    const studentId = await seed(t, {
+      availability: {
+        weekly: [
+          { dayOfWeek: 1, startMin: 540, endMin: 1260 },
+          { dayOfWeek: 3, startMin: 600, endMin: 720, label: "gym" },
+        ],
+        exceptions: [
+          { date: "2026-09-15", blocks: [{ dayOfWeek: 2, startMin: 0, endMin: 60 }] },
+          { date: "2026-09-14", blocks: [] },
+        ],
+      },
+    })
+
+    const result = await t
+      .withIdentity({ subject: CLERK_ID })
+      .mutation(api.students.updatePrefs, {
+        availability: {
+          // Same week: blocks reordered, keys written in another order, and the
+          // exceptions listed the other way round.
+          weekly: [
+            { endMin: 720, label: "gym", startMin: 600, dayOfWeek: 3 },
+            { endMin: 1260, startMin: 540, dayOfWeek: 1 },
+          ],
+          exceptions: [
+            { date: "2026-09-14", blocks: [] },
+            { blocks: [{ startMin: 0, endMin: 60, dayOfWeek: 2 }], date: "2026-09-15" },
+          ],
+        },
+      })
+
+    expect(result.changed).toEqual([])
+    expect(await changesFor(t, studentId)).toHaveLength(0)
+  })
+
+  test("a real difference in the grid is still a change", async () => {
+    const t = setupTest()
+    const studentId = await seed(t, { availability: WEEKDAYS })
+
+    const result = await t
+      .withIdentity({ subject: CLERK_ID })
+      .mutation(api.students.updatePrefs, {
+        availability: {
+          weekly: [...WEEKDAYS.weekly.slice(1)],
+          exceptions: [],
+        },
+      })
+
+    expect(result.changed).toEqual(["availability"])
+    expect(await changesFor(t, studentId)).toHaveLength(1)
+  })
+
   test("a phone is normalized before it is stored or compared", async () => {
     const t = setupTest()
     const studentId = await seed(t)
