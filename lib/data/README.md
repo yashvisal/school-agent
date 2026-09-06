@@ -27,18 +27,19 @@ empty array.
 | `api.courses.get`     | `{ courseId }`              | 403 on someone else's course.                                                                              |
 | `api.deadlines.list`  | `{ from?, to?, courseId? }` | ms range on `dueAt`. **Each row annotated with `pendingChangeId`** (the open change touching it, derived in the query). `removed` filtered server-side; the adapter also drops undated rows (no date-shaped surface for them yet). |
 | `api.tasks.list`      | `{ courseId? }`             | Whole active set; Face windows client-side (resolves the old windowing question — a semester of tasks is a few hundred rows). |
-| `api.changes.feed`    | `{ limit? }`                | Raw docs (`before`/`after` bags, `entity`, `createdAt`, `evidence`). Summary / diff lines / tool label are derived in the adapter. |
+| `api.changes.feed`    | `{ limit? }`                | Raw docs (`before`/`after` bags, `entity`, `createdAt`, `evidence`, `batchId`). Summary / diff lines / tool label are derived in the adapter. |
 | `api.ingest.sources.list` | `{}`                    | Config redacted (`token: "[set]"`); `health` is `{ status, message, at }` — adapter maps to the flat enum and derives `label`/`detail`/`covers` (joined from `courses.sourceRefs`). |
 | `api.signals.recent`  | `{ courseId?, limit? }`     | Raw text + origin + `observedAt` (ms); no aggregation (vision §4b).                                        |
 
-### Mutations Face needs (unchanged asks; `changes.*` exist)
+### Mutations Face needs
 
 | Mutation                  | Status                                                                    |
 | ------------------------- | ------------------------------------------------------------------------- |
 | `api.changes.approve`     | ✅ `{ changeId, via }`                                                     |
 | `api.changes.reject`      | ✅ `{ changeId }`                                                          |
-| `api.changes.approveMany` | still needed for onboarding bulk-approve                                   |
-| `api.changes.propose`     | exists as `internal.changes.propose`; a public `origin: "manual"` wrapper is still needed for the Fix button |
+| `api.changes.approveMany` | ✅ `{ changeIds, via }` **or** `{ batchId, via }` — exactly one selector. Batch mode approves every pending change the caller still has from one extraction run. Already-resolved / foreign / stale ids are skipped, never thrown, so a double-tap is harmless. |
+| `api.changes.proposeManual` | ✅ the Fix button. `{ kind, entity: { table, id }, before?, after?, courseId?, reason?, supersedesChangeId? }` → `{ changeId, status }`. `kind` ∈ `deadline_moved \| deadline_updated \| deadline_removed \| course_updated \| task_updated \| other`; `entity.table` ∈ `deadlines \| courses \| tasks` and must match the kind; `entity.id` is required (a fix edits, never creates). Origin is forced to `manual` and the change is proposed **and approved in the same mutation** — the student's tap is the approval, so `status` comes back `approved` and the row is already patched. Pass `supersedesChangeId` when the fix answers a pending card: that card is `rejected` (`resolvedVia: "web"`) in the same transaction. 401 signed out, 403 someone else's row, 404 a row that no longer exists. |
+| `api.ingest.sources.resync` | ✅ `{ sourceId }` → `{ scheduled: true }`. Runs the poll the cron would have run for that one source (canvas / ical / site), or re-extracts an upload from its stored document (syllabus / schedule). Health flips to `{ status: "unknown", message: "re-sync requested" }` immediately so the card can show progress; the real health arrives when the run finishes. 403 someone else's source, 400 disabled or no adapter yet. |
 | `api.ingest.sources.add` / `setEnabled` | ✅                                                          |
 | `api.students.updatePrefs`| ✅ `{ phone?, timezone?, morningHourLocal?, availability?, checkInPreference?, semesterStart?, semesterEnd? }` — all optional, identity-scoped (no `studentId`). Returns `{ studentId, changed: string[] }`; `changed: []` means nothing moved and no change row was written. Throws `400` on an unusable phone/timezone/hour/date and `409: phone already in use`. |
 | `api.students.ensure`     | ✅ `{ timezone? }` → `Id<"students">`. **Face must call it once after sign-in** — every other query returns empty and `updatePrefs` throws `404` until the row exists. |
@@ -82,5 +83,8 @@ and never waits behind the old number's attempt.
 - **`change.confidence`** comes from `after.provenance.confidence` when the extractor supplied
   one; otherwise the "N% confident" line simply doesn't render.
 - **`accent`** is a deterministic client-side palette by course index, not stored.
-- **Change grouping** (`batchId` for "18 items from CHEM 202's syllabus") is still open for
-  onboarding.
+- **Change grouping** is done: `Change.batchId` carries one id per extraction run
+  (`${sourceId}:${snapshotId}`), so "18 items from CHEM 202's syllabus" is a client-side
+  `groupBy(batchId)` over the feed — count it there, then approve the group with
+  `approveMany({ batchId })`. Changes that were not part of a run (chat, manual, a single
+  Canvas diff) have no `batchId` and render as themselves.

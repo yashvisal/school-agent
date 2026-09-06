@@ -70,8 +70,11 @@ The pending queue must never become a chore inbox. Rules:
 3. **The planner plans on applied facts only.** Any option touched by a pending change is *annotated* (`pending: due date may move to Fri`) so the LLM can see and mention it — never silently planned on, never silently ignored.
 4. **Chat drains the queue proactively:** when a pending change enters the planning horizon (would affect the next plan), the nightly pass surfaces it for a one-word confirmation in the morning text. Nothing rots because the student didn't open the Dashboard.
 5. Pending changes older than the horizon with no signal are dropped with a note in the feed, not applied.
+6. **The Fix button is a manual-origin change applied on the student's tap** (`changes.proposeManual`, face.md "Design rules"): origin `manual` is `needs_approval` by tier, and the signed-in student tapping their own correction *is* the approval, so it is proposed and approved in one mutation — the same shape as `onboarding.resolvePastDeadlines`. A Fix that answers a pending card supersedes it: the card is `rejected` in the same transaction, so the queue never keeps asking about a value the student already overrode.
 
 ### Adapters (each: `fetch → snapshot`, `normalize → courses/deadlines/materials`)
+
+Every extraction run stamps one `changes.batchId` (`${sourceId}:${snapshotId}`, keyed on the run's stored artifact so a forced re-parse of the same document rejoins its own batch) on every change it proposes, so the web queue can show a parse as one card ("18 items from CHEM 202's syllabus") and approve it in one gesture via `changes.approveMany({ batchId })` rather than eighteen taps.
 
 1. **Canvas** — REST, per-user token, Link-header pagination. Courses, assignments (due, points, group weights), submissions, plus files/modules/pages/announcements (raw). Handle unpublished/concluded courses. Verify rate limits at developerdocs.instructure.com.
 2. **iCal** — VEVENTs → deadlines (title + date only). Canvas iCal feeds encode the assignment ID in the event UID (`event-assignment-<id>`), so dedupe against the Canvas adapter is an **exact join on ID**; fuzzy title/date matching is only the fallback for non-Canvas feeds. Canvas wins on conflict.
